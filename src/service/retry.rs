@@ -261,7 +261,7 @@ pub fn start_service(
 
                         });
 
-                        scan_task.await;
+                        let _ = scan_task.await;
                         let result = load_task.await;
                         if let Err(err) = result {
                             panic!("Error in load task of retry: {}",err);

@@ -608,7 +608,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
             // ===================================
             // 9.2.4 send complete message to main
             // ===================================
-            task_ch.send(true).await;
+            let _ = task_ch.send(true).await;
         });
         // =============================
         // 9.3 Wait for task to complete
@@ -640,7 +640,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     // Shutdown other services
     // ==============================
     println!("MAIN: shutdown services");
-    shutdown_broadcast_sender.send(0);
+    let _ = shutdown_broadcast_sender.send(0);
 
     println!("MAIN: stats_service.await;");
     let _ = stats_service.await;

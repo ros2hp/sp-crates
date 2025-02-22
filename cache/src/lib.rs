@@ -165,11 +165,13 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + std::marker::Sync + Se
         if let Err(err) = guard.lru_flush_ch.send(client_ch).await {
                 panic!("cache: LRU send on client_ch {} ",err);
         };
+        drop(guard);
+
         println!("cache: waiting lru flush to finish...");
         let _ = client_rx.recv().await;
         println!("cache: sleep.. wait for LRU persists to finish..."); 
-        //sleep(Duration::from_millis(5000)).await;
 
+        guard = self.0.lock().await;
         if let Err(err) = guard.persist_shutdown_ch.send(1).await {
             panic!("cache: LRU send on persist_shutdown_ch {} ",err);
         };
@@ -177,6 +179,8 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + std::marker::Sync + Se
         if let Some(ref mut persist) = guard.persist_srv {
             let _ = persist.await;
         }
+
+        sleep(Duration::from_millis(5000)).await;
     }
 
 
