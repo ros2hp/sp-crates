@@ -226,9 +226,9 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                         println!("{} LRU Error sending on Evict channel: [{}]", task,err);
                     }
                     println!("{} LRU: attach evict - waiting on persist client_rx...{:?}",task, evict_entry.key);
-                    if let None= self.client_rx.recv().await {
-                        panic!("LRU read from client_rx is None ");
-                    }
+                    //if let None= self.client_rx.recv().await {
+                    //    panic!("LRU read from client_rx is None ");
+                   // }
                     // =====================================================================
                     // cache lock released - now that submit persist has been sent (queued)
                     // =====================================================================
@@ -419,9 +419,9 @@ pub fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone 
                             }
                         }
                         // send response back to client...sync'd.
-                        if let Err(err) = client_ch.send(true).await {
-                            panic!("LRU action send to client_ch {} ",err);
-                        };
+                      if let Err(err) = client_ch.send(true).await {
+                          panic!("LRU action send to client_ch {} ",err);
+                      };
                     }
 
                 Some(client_ch) = lru_flush_rx.recv() => {
@@ -442,9 +442,9 @@ pub fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone 
                                                             }
                                             } 
                                             // sync with Persist service
-                                            if let None = lru_evict.client_rx.recv().await {
-                                                panic!("LRU read from client_rx is None ");
-                                            }
+                                            //if let None = lru_evict.client_rx.recv().await {
+                                            //    panic!("LRU read from client_rx is None ");
+                                            //}
                                             entry = entry_.lock().await.next.clone();      
                                     }
                                     //sleep(Duration::from_millis(2000)).await;

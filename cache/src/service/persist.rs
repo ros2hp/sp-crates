@@ -145,9 +145,9 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
     
                             });
                         }
-                        if let Err(err) = client_ch.send(true).await {
-                            panic!("Error in sending query_msg [{}]",err)
-                        };
+            //            if let Err(err) = client_ch.send(true).await {
+            //                panic!("Error in sending query_msg [{}]",err)
+            //            };
                         println!("{} PERSIST: submit - Exit",task);
 
                 },
