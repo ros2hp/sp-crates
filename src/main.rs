@@ -5,7 +5,7 @@ mod service;
 mod types;
 
 extern crate cache;
-use cache::{Waits, Event};
+use cache::event_stats;//{Waits, Event};
 
 use std::collections::HashMap;
 use std::env;
@@ -231,8 +231,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     // =====================
     // setup Stats recorder 
     // =====================
-    let (stats_ch, mut stats_rx) = tokio::sync::mpsc::channel::<(Event, Duration, Duration)>(MAX_SP_TASKS*10); 
-    let waits = Waits::new(stats_ch.clone());
+    let (stats_ch, mut stats_rx) = tokio::sync::mpsc::channel::<(event_stats::Event, Duration, Duration)>(MAX_SP_TASKS*10); 
+    let waits = event_stats::Waits::new(stats_ch.clone());
     // =====================
     // shutdown channel 
     // =====================   
@@ -252,7 +252,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
             table_name,
         );
 
-    let stats_service = cache::event_stats::start_event_service(stats_rx, stats_shutdown_ch);
+    let stats_service = event_stats::start_event_service(stats_rx, stats_shutdown_ch);
 
     // ===========================================
     // 3. allocate cache - with database config
@@ -670,7 +670,7 @@ async fn persist(
     ,ovb_pk: HashMap<String, Vec<Uuid>>
     ,items: HashMap<SortK, Operation>
     //
-    ,waits : Waits
+    ,waits : event_stats::Waits
 ) {
     // create channels to communicate (to and from) lru eviction service
     // evict_resp_ch: sender - passed to eviction service so it can send its response back to this routine
@@ -1040,7 +1040,7 @@ async fn fetch_p_edge_meta<'a, T: Into<String>>(
     graph_sn: T,
     node_types: &'a types::NodeTypes,
     table_name: &str,
-    waits: Waits,
+    waits: event_stats::Waits,
 ) -> (&'a types::NodeType, Vec<Uuid>) {
     let proj = types::ND.to_owned() + "," + types::XF + "," + types::TY;
     
@@ -1053,7 +1053,7 @@ async fn fetch_p_edge_meta<'a, T: Into<String>>(
         .projection_expression(proj)
         .send()
         .await;
-    waits.record(Event::GetItem, Instant::now().duration_since(before)).await;
+    waits.record(event_stats::Event::GetItem, Instant::now().duration_since(before)).await;
 
     if let Err(err) = result {
         panic!(

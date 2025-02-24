@@ -1,7 +1,6 @@
 
 mod service;
-pub extern crate event_stats; // makes crate public,
-//extern crate event_stats;        // private crate 
+pub extern crate event_stats;         // makes crate public
 
 use std::sync::Arc;
 use std::cmp::Eq;
@@ -17,7 +16,7 @@ use tokio::sync::Mutex;
 // ===========
 // re-export
 // ===========
-pub use event_stats::{Waits,Event};
+//pub use event_stats::{Waits,Event};
 
 
 const LRU_CAPACITY : usize = 40;
@@ -36,7 +35,7 @@ pub trait Persistence_<K, D>
         &mut self
         ,task : usize
         ,db : D
-        ,waits : Waits
+        ,waits : event_stats::Waits
         ,persist_completed_send_ch : tokio::sync::mpsc::Sender<(K, usize)>
     );
 }
@@ -73,7 +72,7 @@ pub struct InnerCache<K,V> {
     inuse : HashMap<K,u8>,
     persisting: HashSet<K>,
     // performance stats rep
-    waits : Waits,
+    waits : event_stats::Waits,
     lru_flush_ch : tokio::sync::mpsc::Sender<tokio::sync::mpsc::Sender<()>>,
     persist_shutdown_ch : tokio::sync::mpsc::Sender<u8>,
     persist_srv : Option<tokio::task::JoinHandle<()>>,
@@ -90,7 +89,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + std::marker::Sync + Se
 {
 
     pub fn new<D: Clone + std::marker::Sync + Send + 'static >(
-        waits : Waits
+        waits : event_stats::Waits
         ,db : D
     ) -> Self
     where V: Persistence<K,D>
@@ -288,10 +287,10 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 if let Err(err) = lru_ch.send((task, key.clone(), before, lru_client_ch, lru::LruAction::Attach)).await {
                     panic!("Send on lru_attach_ch errored: {}", err);
                 }   
-                waits.record(Event::LRUSendAttach,Instant::now().duration_since(before)).await;    
+                waits.record(event_stats::Event::LRUSendAttach,Instant::now().duration_since(before)).await;    
                 // sync'd: wait for LRU operation to complete - just like using a mutex is synchronous with operation.
                 let _ = srv_resp_rx.recv().await;
-                waits.record(Event::Attach,Instant::now().duration_since(before)).await; 
+                waits.record(event_stats::Event::Attach,Instant::now().duration_since(before)).await; 
 
                 return CacheValue::New(arc_value.clone());
             }
@@ -328,9 +327,9 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 if let Err(err) = lru_ch.send((task, key.clone(), before, lru_client_ch, lru::LruAction::Move_to_head)).await {
                     panic!("Send on lru_move_to_head_ch failed {}",err)
                 };
-                waits.record(Event::LRUSendMove,Instant::now().duration_since(before)).await; 
+                waits.record(event_stats::Event::LRUSendMove,Instant::now().duration_since(before)).await; 
                 let _ = srv_resp_rx.recv().await;
-                waits.record(Event::MoveToHead,Instant::now().duration_since(before)).await;
+                waits.record(event_stats::Event::MoveToHead,Instant::now().duration_since(before)).await;
 
                 return CacheValue::Existing(arc_value.clone());
             }
@@ -342,7 +341,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
         ,task: usize
         ,key: K  
         ,persist_query_ch : tokio::sync::mpsc::Sender<QueryMsg<K>>
-        ,waits : Waits
+        ,waits : event_stats::Waits
     )  {
         let (persist_client_send_ch, mut persist_srv_resp_rx) = tokio::sync::mpsc::channel::<bool>(1);
         // wait for evict service to give go ahead...(completed persisting)
@@ -354,7 +353,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                                 {
                                     panic!("evict channel comm failed = {}", e);
                                 }
-        waits.record(Event::ChanPersistQuery,Instant::now().duration_since(before)).await;
+        waits.record(event_stats::Event::ChanPersistQuery,Instant::now().duration_since(before)).await;
 
         // wait for persist to complete
         before =Instant::now();
@@ -365,7 +364,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                         
                     }
                     };
-        waits.record(Event::ChanPersistQueryResp,Instant::now().duration_since(before)).await;
+        waits.record(event_stats::Event::ChanPersistQueryResp,Instant::now().duration_since(before)).await;
             
         if persist_resp {
                     // ====================================
@@ -374,7 +373,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                     println!("{} CACHE: wait_for_persist_to_complete entered...wait for io to complete...{:?}",task, key);
                     before =Instant::now();
                     persist_srv_resp_rx.recv().await;
-                    waits.record(Event::ChanPersistWait,Instant::now().duration_since(before)).await;
+                    waits.record(event_stats::Event::ChanPersistWait,Instant::now().duration_since(before)).await;
                 }
     }
 }

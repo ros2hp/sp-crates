@@ -4,7 +4,9 @@ use crate::types;
 use crate::rkey::RKey;
 
 use cache::{Persistence,NewValue};
-use cache::event_stats::Waits;
+//use cache::event_stats::Waits;
+//use cache::Waits;
+use cache::event_stats;       // use x::? where ? can be type, mod, crate
 
 use std::fmt::Debug;
 
@@ -214,7 +216,7 @@ impl Persistence<RKey, Dynamo> for RNode {
         &mut self,
         task : usize, 
         db: Dynamo,
-        waits : Waits,
+        waits : event_stats::Waits,
         persist_completed_send_ch: tokio::sync::mpsc::Sender<(RKey, usize)>,
     )
 {
@@ -280,7 +282,7 @@ impl Persistence<RKey, Dynamo> for RNode {
                     //.return_values(ReturnValue::AllNew)
                     .send()
                     .await;
-                    waits.record(Event::PersistEmbedded, Instant::now().duration_since(before)).await;        
+                    waits.record(event_stats::Event::PersistEmbedded, Instant::now().duration_since(before)).await;        
                
                     handle_result(&rkey, result);
         
@@ -297,7 +299,7 @@ impl Persistence<RKey, Dynamo> for RNode {
                 let mut target_uid: Vec<AttributeValue> = vec![];
                 let mut target_id: Vec<AttributeValue> = vec![];
                 let mut sk_w_bid : String;
-                let event :Event ;
+                let event : event_stats::Event ;
         
                 match self.ocur {
                     None => {
@@ -331,7 +333,7 @@ impl Persistence<RKey, Dynamo> for RNode {
         
                             }                                        
                             update_expression = "SET #target=list_append(#target, :tuid), #id=list_append(#id, :id)";  
-                            event = Event::PersistOvbAppend;
+                            event = event_stats::Event::PersistOvbAppend;
                             sk_w_bid = rkey.1.clone();
                             sk_w_bid.push('%');
                             sk_w_bid.push_str(&self.obid[ocur as usize].to_string());
@@ -382,7 +384,7 @@ impl Persistence<RKey, Dynamo> for RNode {
                             sk_w_bid.push_str(&self.obid[ocur as usize].to_string());
             
                             update_expression = "SET #target = :tuid, #id = :id";
-                            event = Event::PersistOvbSet;
+                            event = event_stats::Event::PersistOvbSet;
                         }
                         // ================
                         // add OvB batches
@@ -443,7 +445,7 @@ impl Persistence<RKey, Dynamo> for RNode {
                     //.return_values(ReturnValue::AllNew)
                     .send()
                     .await;
-                    waits.record(Event::PersistMeta, Instant::now().duration_since(before)).await;        
+                    waits.record(event_stats::Event::PersistMeta, Instant::now().duration_since(before)).await;        
              
                 handle_result(&rkey, result);
                 
