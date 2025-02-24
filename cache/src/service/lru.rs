@@ -382,7 +382,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
 }
 
 
-pub fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker::Send + std::marker::Sync + 'static, V: std::marker::Send + std::marker::Sync + Clone + std::fmt::Debug + 'static>
+pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker::Send + std::marker::Sync + 'static, V: std::marker::Send + std::marker::Sync + Clone + std::fmt::Debug + 'static>
 (        lru_capacity : usize
         ,mut cache: Cache<K,V>
         //

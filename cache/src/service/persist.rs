@@ -68,7 +68,7 @@ impl<K> QueryClient<K> {
 //     }
 // }
 
-pub fn start_service<K,V,D>(
+pub(crate) fn start_service<K,V,D>(
     cache: Cache<K,V>,
     db : D,
     // channels

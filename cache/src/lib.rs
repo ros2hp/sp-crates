@@ -1,5 +1,5 @@
 
-pub mod service;
+mod service;
 pub extern crate event_stats; // makes crate public,
 //extern crate event_stats;        // private crate 
 
@@ -10,7 +10,7 @@ use std::fmt::Debug;
 use std::collections::HashSet;
 use std::collections::HashMap;
 
-pub use crate::service::lru;
+use crate::service::lru;
 
 use tokio::time::{sleep, Duration, Instant};
 use tokio::sync::Mutex;
