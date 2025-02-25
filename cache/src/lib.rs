@@ -79,7 +79,7 @@ pub struct InnerCache<K,V> {
 
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Cache<K,V>(pub Arc<Mutex<InnerCache<K,V>>>);
 
 
@@ -227,12 +227,12 @@ impl<K : Hash + Eq + Debug + Clone,V : Clone + Debug >  InnerCache<K,V>
 
 }
 
-impl<K,V> Clone for Cache<K,V> where K : Hash + Eq + Debug + Clone, V:  Clone + Debug {
+// impl<K,V> Clone for Cache<K,V> where K : Hash + Eq + Debug + Clone, V:  Clone + Debug {
 
-    fn clone(&self) -> Self {
-        Cache::<K,V>(self.0.clone())
-    }
-}
+//     fn clone(&self) -> Self {
+//         Cache::<K,V>(self.0.clone())
+//     }
+// }
 
 impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V>
 {
