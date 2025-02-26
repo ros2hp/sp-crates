@@ -116,7 +116,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + std::marker::Sync + Se
         // =========================================
         // 4. create channels and start LRU service 
         // ======================================== 
-        let (lru_persist_submit_ch, persist_submit_rx) = tokio::sync::mpsc::channel::<(usize, K, Arc<Mutex<V>>, tokio::sync::mpsc::Sender<bool>)>(MAX_SP_TASKS);
+        let (lru_persist_submit_ch, persist_submit_rx) = tokio::sync::mpsc::channel::<(usize, K, Arc<Mutex<V>>)>(MAX_SP_TASKS);
 
         let _ = service::lru::start_service::<K,V>(
                                         LRU_CAPACITY

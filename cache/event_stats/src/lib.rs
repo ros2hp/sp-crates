@@ -28,7 +28,7 @@ pub enum Event {
     PersistOvbAppend,
     PersistMeta,
     // Cache
-    LruEvictCacheLock
+    LRUCacheLock
 }
 
 #[derive(Clone,Debug)]

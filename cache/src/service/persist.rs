@@ -72,7 +72,7 @@ pub(crate) fn start_service<K,V,D>(
     cache: Cache<K,V>,
     db : D,
     // channels
-    mut submit_rx: tokio::sync::mpsc::Receiver<(usize, K, Arc<Mutex<V>>, tokio::sync::mpsc::Sender<bool>)>,
+    mut submit_rx: tokio::sync::mpsc::Receiver<(usize, K, Arc<Mutex<V>>)>,
     mut client_query_rx: tokio::sync::mpsc::Receiver<QueryMsg<K>>,
     mut shutdown_rx: tokio::sync::mpsc::Receiver<u8>,
     //
@@ -106,7 +106,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                 biased;         // removes random number generation - normal processing will determine order so select! can follow it.
                 // note: recv() is cancellable, meaning select! can cancel a recv() without loosing data in the channel.
                 // select! will be forced to cancel recv() if another branch event happens e.g. recv() on shutdown_rxannel.
-                Some((task, key, arc_node, client_ch )) = submit_rx.recv() => {
+                Some((task, key, arc_node )) = submit_rx.recv() => {
 
                     //  no locks acquired  - apart from Cache in async routine, which is therefore safe.
 
@@ -145,9 +145,6 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
     
                             });
                         }
-            //            if let Err(err) = client_ch.send(true).await {
-            //                panic!("Error in sending query_msg [{}]",err)
-            //            };
                         println!("{} PERSIST: submit - Exit",task);
 
                 },
@@ -168,7 +165,6 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                                 if let Err(err) = v.send(true).await {
                                     panic!("Error in sending to waiting client that K is evicited [{}]",err)
                                 }
-                                //sleep(Duration::from_millis(10)).await;
                             } else {
                                 break
                             }

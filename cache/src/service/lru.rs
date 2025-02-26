@@ -46,16 +46,13 @@ impl<K: Hash + Eq + Debug> Entry<K> {
 
 
 
-struct LRUevict<K: Hash + Eq + Debug,V> {
+struct LRU<K: Hash + Eq + Debug,V> {
     capacity: usize,
     cnt : usize,
     // pointer to Entry value in the LRU linked list for a K
     lookup : HashMap<K,Arc<Mutex<Entry<K>>>>,
-    // 
-    client_ch : tokio::sync::mpsc::Sender::<bool>,
-    client_rx : tokio::sync::mpsc::Receiver::<bool>,
     //
-    persist_submit_ch: tokio::sync::mpsc::Sender<(usize, K, Arc<Mutex<V>>, tokio::sync::mpsc::Sender<bool>)>,
+    persist_submit_ch: tokio::sync::mpsc::Sender<(usize, K, Arc<Mutex<V>>)>,
     // record stat waits
     waits : Waits,
     //
@@ -76,7 +73,7 @@ struct LRUevict<K: Hash + Eq + Debug,V> {
 
 
 // implement attach & move_to_head as trait methods.
-// // Makes more sense however for these methods to be part of the LRUevict itself - just epxeriementing with traits.
+// // Makes more sense however for these methods to be part of the LRU itself - just epxeriementing with traits.
 // pub trait LRU {
 //     fn attach(
 //         &mut self, // , cache_guard:  &mut std::sync::MutexGuard<'_, Cache::<K,V>>
@@ -91,17 +88,15 @@ struct LRUevict<K: Hash + Eq + Debug,V> {
 // }
 
 
-impl<K: Hash + Eq + Debug,V> LRUevict<K,V> 
+impl<K: Hash + Eq + Debug,V> LRU<K,V> 
 where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker::Send
 {  
     pub fn new(
         cap: usize,
-        persist_submit_ch: tokio::sync::mpsc::Sender<(usize, K, Arc<tokio::sync::Mutex<V>>, tokio::sync::mpsc::Sender<bool>)>,
-        client_ch : tokio::sync::mpsc::Sender::<bool>,
-        client_rx : tokio::sync::mpsc::Receiver::<bool>,
+        persist_submit_ch: tokio::sync::mpsc::Sender<(usize, K, Arc<tokio::sync::Mutex<V>>)>,
         waits : Waits
     ) -> Self {
-        LRUevict{
+        LRU{
             capacity: cap,
             cnt: 0,
             lookup: HashMap::new(),
@@ -109,9 +104,6 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
             persist_submit_ch: persist_submit_ch,
             // record stat waits
             waits,
-            // sync channels with Persist
-            client_ch: client_ch,
-            client_rx : client_rx,
             //
             head: None,
             tail: None,
@@ -134,11 +126,11 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
     }
 
 }
-impl<K,V> LRUevict<K,V> 
+impl<K,V> LRU<K,V> 
 where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker::Send, V:  Clone + Debug
 {    
     // prerequisite - lru_entry has been confirmed NOT to be in lru-cache.
-    // note: can only execute methods on LRUevict if lock has been acquired via Arc<Mutex<LRU>>
+    // note: can only execute methods on LRU if lock has been acquired via Arc<Mutex<LRU>>
     async fn attach(
         &mut self, // , cache_guard:  &mut tokio::sync::MutexGuard<'_, Cache::<K,V>>
         task : usize,
@@ -160,8 +152,8 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
             println!("{} LRU: attach reached LRU capacity - evict tail  lru.cnt {}  lc {}  key {:?}", task, self.cnt, lc,  key);
             // unlink tail lru_entry from lru and notify evict service.
             // Clone REntry as about to purge it from cache.
-            let lru_evict_entry = self.tail.as_ref().unwrap().clone();
-            let mut evict_entry = lru_evict_entry.lock().await;
+            let lru_entry = self.tail.as_ref().unwrap().clone();
+            let mut evict_entry = lru_entry.lock().await;
             // ================================
             // Lock cache
             // ================================
@@ -220,7 +212,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                     // =====================
                     if let Err(err) = self
                         .persist_submit_ch
-                        .send((task, evict_entry.key.clone(), arc_evict_node.clone(), self.client_ch.clone()))
+                        .send((task, evict_entry.key.clone(), arc_evict_node.clone()))
                         .await
                     {
                         println!("{} LRU Error sending on Evict channel: [{}]", task,err);
@@ -240,7 +232,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                     break;
                 }
             }
-            self.waits.record(Event::LruEvictCacheLock, Instant::now().duration_since(before)).await;  
+            self.waits.record(Event::LRUCacheLock, Instant::now().duration_since(before)).await;  
         }
         // ======================
         // attach to head of LRU
@@ -389,7 +381,7 @@ pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug +
         ,mut lru_rx : tokio::sync::mpsc::Receiver<(usize, K, Instant,tokio::sync::mpsc::Sender<bool>, LruAction)>
         ,mut lru_flush_rx : tokio::sync::mpsc::Receiver<tokio::sync::mpsc::Sender<()>>
         //
-        ,persist_submit_ch : tokio::sync::mpsc::Sender<(usize, K, Arc<Mutex<V>>, tokio::sync::mpsc::Sender<bool>)>
+        ,persist_submit_ch : tokio::sync::mpsc::Sender<(usize, K, Arc<Mutex<V>>)>
         //
 
         ,waits : Waits
@@ -398,7 +390,7 @@ pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug +
     // 
     let (lru_client_ch, lru_client_rx) = tokio::sync::mpsc::channel::<bool>(1);
    
-    let mut lru_evict = lru::LRUevict::new(lru_capacity, persist_submit_ch.clone(), lru_client_ch, lru_client_rx, waits);
+    let mut lru = lru::LRU::new(lru_capacity, persist_submit_ch.clone(), waits);
 
     let lru_server = tokio::task::spawn( async move { 
         println!("LRU service started....");
@@ -411,11 +403,11 @@ pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug +
                         match action {
                             LruAction::Attach => {
                                 println!("{} LRU delay {:?} LRU: action Attach {:?}",Instant::now().duration_since(sent_time).as_nanos(),task, key);
-                                lru_evict.attach( task, key, cache.clone()).await;
+                                lru.attach( task, key, cache.clone()).await;
                             }
                             LruAction::Move_to_head => {
                                 println!("{} LRU delay {:?} LRU: action move_to_head {:?}", Instant::now().duration_since(sent_time).as_nanos(), task, key);
-                                lru_evict.move_to_head( task, key).await;
+                                lru.move_to_head( task, key).await;
                             }
                         }
                         // send response back to client...sync'd.
@@ -427,24 +419,20 @@ pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug +
                 Some(client_ch) = lru_flush_rx.recv() => {
                                
                                 println!("LRU service - flush lru ");
-                                    let mut entry = lru_evict.head;
+                                    let mut entry = lru.head;
                                     let mut lc = 0;
                                     let cache_guard = cache.0.lock().await;
-                                    println!("LRU flush in progress..persist entries in LRU flust {} lru entries",lru_evict.cnt);
+                                    println!("LRU flush in progress..persist entries in LRU flust {} lru entries",lru.cnt);
                                     while let Some(entry_) = entry {
                                             lc += 1;     
                                             let k = entry_.lock().await.key.clone();
                                             if let Some(arc_node) = cache_guard.datax.get(&k) {
-                                                if let Err(err) = lru_evict.persist_submit_ch // persist_flush_ch
-                                                            .send((0, k, arc_node.clone(), lru_evict.client_ch.clone()))
+                                                if let Err(err) = lru.persist_submit_ch // persist_flush_ch
+                                                            .send((0, k, arc_node.clone()))
                                                             .await {
                                                                 println!("Error on persist_submit_ch channel [{}]",err);
                                                             }
                                             } 
-                                            // sync with Persist service
-                                            //if let None = lru_evict.client_rx.recv().await {
-                                            //    panic!("LRU read from client_rx is None ");
-                                            //}
                                             entry = entry_.lock().await.next.clone();      
                                     }
                                     //sleep(Duration::from_millis(2000)).await;
