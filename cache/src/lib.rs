@@ -164,13 +164,13 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + std::marker::Sync + Se
         if let Err(err) = guard.lru_flush_ch.send(client_ch).await {
                 panic!("cache: LRU send on client_ch {} ",err);
         };
-        drop(guard);
+        //drop(guard);
 
         println!("cache: waiting lru flush to finish...");
         let _ = client_rx.recv().await;
         println!("cache: sleep.. wait for LRU persists to finish..."); 
 
-        guard = self.0.lock().await;
+        //guard = self.0.lock().await;
         if let Err(err) = guard.persist_shutdown_ch.send(1).await {
             panic!("cache: LRU send on persist_shutdown_ch {} ",err);
         };
@@ -259,7 +259,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 let lru_ch = cache_guard.lru_ch.clone();
                 let waits = cache_guard.waits.clone();
                 let persist_query_ch = cache_guard.persist_query_ch.clone();
-                                // acquire lock on value and release cache lock - this prevents concurrent updates to value 
+                // acquire lock on value and release cache lock - this prevents concurrent updates to value 
                 // and optimises cache concurrency by releasing lock asap
                 let arc_value = V::new_with_key(key);
                 // =========================
