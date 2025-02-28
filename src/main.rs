@@ -192,7 +192,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
         env::var("MYSQL_PWD").expect("env variable `MYSQL_PWD` should be set in profile");
     let mysql_dbname =
         env::var("MYSQL_DBNAME").expect("env variable `MYSQL_DBNAME` should be set in profile");
-    let max_sp_tasks_ = env::var("max_sp_tasks").expect("env variable `max_sp_tasks` should be set in profile");
+    let max_sp_tasks_ = env::var("MAX_SP_TASKS").expect("env variable `max_sp_tasks` should be set in profile");
     let graph = env::var("GRAPH_NAME").expect("env variable `GRAPH_NAME` should be set in profile");
     let table_name = "RustGraph.dev.10";
     // ===========================
