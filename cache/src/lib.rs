@@ -67,7 +67,6 @@ pub struct InnerCache<K,V> {
     persist_query_ch : tokio::sync::mpsc::Sender<QueryMsg<K>>,
     lru_ch : tokio::sync::mpsc::Sender<(usize, K, Instant, tokio::sync::mpsc::Sender<bool>, lru::LruAction)>,
     // state of K in cache
-    //evicted : HashSet<K>,
     inuse : HashMap<K,u8>,
     persisting: HashSet<K>,
     // performance stats rep
@@ -205,8 +204,12 @@ impl<K : Hash + Eq + Debug + Clone,V : Clone + Debug >  InnerCache<K,V>
     pub fn inuse(&self, key: &K) -> bool {
         //println!("InnerCache inuse [{:?}]",key);
         match self.inuse.get(key) {
-            None => false,
-            Some(i) => {*i > 0},
+            None => {//println!("InnerCache inuse [{:?}] false ",key);
+                     false
+                    },
+            Some(i) => {//println!("InnerCache inuse [{:?}] value {}) ",key,*i);
+                            *i > 0
+                            },
         }
     }
 
@@ -237,10 +240,10 @@ impl<K : Hash + Eq + Debug + Clone,V : Clone + Debug >  InnerCache<K,V>
 impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V>
 {
 
-    pub async fn unlock(&mut self, key: &K) {
-        println!("CACHE: cache.unlock {:?}",key);
+    pub async fn unlock(&self, key: &K) {
+        //println!("CACHE: cache.unlock {:?}",key);
         self.0.lock().await.unset_inuse(key);
-        println!("CACHE: cache.unlock DONE");
+        //println!("CACHE: cache.unlock DONE");
     }
 
     pub async fn get(
@@ -291,7 +294,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // sync'd: wait for LRU operation to complete - just like using a mutex is synchronous with operation.
                 let _ = srv_resp_rx.recv().await;
                 waits.record(event_stats::Event::Attach,Instant::now().duration_since(before)).await; 
-
+                self.unlock(&key).await;
                 return CacheValue::New(arc_value.clone());
             }
             
@@ -330,7 +333,8 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 waits.record(event_stats::Event::LRUSendMove,Instant::now().duration_since(before)).await; 
                 let _ = srv_resp_rx.recv().await;
                 waits.record(event_stats::Event::MoveToHead,Instant::now().duration_since(before)).await;
-
+                self.unlock(&key).await;
+                
                 return CacheValue::Existing(arc_value.clone());
             }
         }
@@ -377,7 +381,3 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 }
     }
 }
-
-
-
-
