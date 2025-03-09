@@ -207,9 +207,9 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                     // ================================
                     drop(cache_guard);  
                     drop(evict_node_guard); // required by persist 
-                    // =====================
-                    // notify persist service
-                    // =====================
+                    // ============================================
+                    // notify persist service - don't wait for resp
+                    // ============================================
                     if let Err(err) = self
                         .persist_submit_ch
                         .send((task, evict_entry.key.clone(), arc_evict_node.clone()))
@@ -217,10 +217,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                     {
                         println!("{} LRU Error sending on Evict channel: [{}]", task,err);
                     }
-                    println!("{} LRU: attach evict - waiting on persist client_rx...{:?}",task, evict_entry.key);
-                    //if let None= self.client_rx.recv().await {
-                    //    panic!("LRU read from client_rx is None ");
-                   // }
+
                     // =====================================================================
                     // cache lock released - now that submit persist has been sent (queued)
                     // =====================================================================
@@ -281,7 +278,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                 panic!("LRU INCONSISTENCY attach: expected LRU to have tail but got NONE")
         }
         self.cnt+=1;
-        println!("{} LRU: attach add cnt {}",task, self.cnt);
+        //println!("{} LRU: attach add cnt {}",task, self.cnt);
         }
         //self.print("attach").await;
     }
