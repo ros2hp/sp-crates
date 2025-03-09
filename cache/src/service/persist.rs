@@ -90,6 +90,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
     let mut pending_q = PendingQ::new();
     let mut query_client = QueryClient::new();
     let mut tasks = 0;
+    let mut shutdown = false;
 
     // persist channel used to acknowledge to a waiting client that the associated node has completed persistion.
     let (persist_completed_send_ch, mut persist_completed_rx) =
@@ -153,6 +154,11 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
 
                     tasks-=1;
                     
+                    if shutdown && tasks == 0 && pending_q.0.len() == 0 {
+                        println!("Persist Service shutdown.");
+                        return;
+                    }
+
                     //println!("{} PERSIST : completed msg:  key {:?}  tasks {}", task, persist_key, tasks);
                     persisting_lookup.0.remove(&persist_key);
                     cache.0.lock().await.unset_persisting(&persist_key);
@@ -230,6 +236,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                 },
 
                 _ = shutdown_rx.recv() => {
+                        shutdown=true;
                         println!("PERSIST shutdown:  Waiting for remaining persist tasks [{}] pending_q {} to complete...",tasks as usize, pending_q.0.len());
                         while tasks > 0 || pending_q.0.len() > 0 {
                             if tasks > 0 {

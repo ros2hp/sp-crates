@@ -178,7 +178,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + std::marker::Sync + Se
             let _ = persist.await;
         }
 
-        sleep(Duration::from_millis(5000)).await;
+        //sleep(Duration::from_millis(5000)).await;
     }
 
 
@@ -262,8 +262,6 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 let lru_ch = cache_guard.lru_ch.clone();
                 let waits = cache_guard.waits.clone();
                 let persist_query_ch = cache_guard.persist_query_ch.clone();
-                // acquire lock on value and release cache lock - this prevents concurrent updates to value 
-                // and optimises cache concurrency by releasing lock asap
                 let arc_value = V::new_with_key(key);
                 // =========================
                 // add to cache, set in-use 
