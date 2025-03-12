@@ -292,7 +292,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // sync'd: wait for LRU operation to complete - just like using a mutex is synchronous with operation.
                 let _ = srv_resp_rx.recv().await;
                 waits.record(event_stats::Event::Attach,Instant::now().duration_since(before)).await; 
-                self.unlock(&key).await;
+
                 return CacheValue::New(arc_value.clone());
             }
             
