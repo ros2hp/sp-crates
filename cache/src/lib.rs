@@ -331,7 +331,6 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 waits.record(event_stats::Event::LRUSendMove,Instant::now().duration_since(before)).await; 
                 let _ = srv_resp_rx.recv().await;
                 waits.record(event_stats::Event::MoveToHead,Instant::now().duration_since(before)).await;
-                self.unlock(&key).await;
                 
                 return CacheValue::Existing(arc_value.clone());
             }
