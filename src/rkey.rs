@@ -38,7 +38,7 @@ impl RKey {
                     .await;
                 node_guard.add_reverse_edge(target.clone(), id as u32);
 
-                cache.unlock(&self);
+                cache.unlock(self);
             }
 
             CacheValue::Existing(node) => {
@@ -47,7 +47,7 @@ impl RKey {
 
                 node_guard.add_reverse_edge(target.clone(), id as u32);
 
-                cache.unlock(&self);
+                cache.unlock(self);
             }
         }
     }
