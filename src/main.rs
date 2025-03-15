@@ -197,6 +197,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
         env::var("MAX_SP_TASKS").expect("env variable `max_sp_tasks` should be set in profile");
     let graph = env::var("GRAPH_NAME").expect("env variable `GRAPH_NAME` should be set in profile");
     let table_name = "RustGraph.dev.10";
+    let evict_tries = "3";
     // ===========================
     // 2. Print config
     // ===========================
@@ -205,6 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     println!("Config: LRU_CAPACITY:   {}", LRU_CAPACITY);
     println!("Config: Table name:     {}", table_name);
     println!("Config: DateTime :      {:?}", Instant::now());
+    println!("Config: Evict_Tries :   {:?}", evict_tries);
     println!("=================================  ");
 
     let max_sp_tasks = usize::from_str_radix(&max_sp_tasks_, 10).unwrap();
@@ -263,7 +265,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     // 3. allocate cache - with database config
     // ===========================================
     let db: Dynamo = Dynamo::new(dynamo_client.clone(), table_name.to_string());
-    let reverse_edge_cache = Cache::<RKey, RNode>::new(max_sp_tasks, waits.clone(), db);
+    let Ok(evict_tries_) = evict_tries.parse() else {  panic!("evict_tries cannot be parsed to usize")};
+    let reverse_edge_cache = Cache::<RKey, RNode>::new(max_sp_tasks, waits.clone(), evict_tries_, db);
 
     // ================================
     // 5. Setup a MySQL connection pool

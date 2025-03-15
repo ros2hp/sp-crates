@@ -20,7 +20,7 @@ impl RKey {
         task: usize,
         dyn_client: &DynamoClient,
         table_name: &str, //
-        mut cache: Cache<RKey, RNode>, //
+        cache: Cache<RKey, RNode>, //
         target: &Uuid,
         id: usize,
     ) {

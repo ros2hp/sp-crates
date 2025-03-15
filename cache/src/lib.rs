@@ -89,6 +89,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + std::marker::Sync + Se
     pub fn new<D: Clone + std::marker::Sync + Send + 'static >(
         max_sp_tasks : usize
         ,waits : event_stats::Waits
+        ,evict_tries: usize
         ,db : D
     ) -> Self
     where V: Persistence<K,D>
@@ -123,6 +124,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + std::marker::Sync + Se
                                         , lru_operation_rx
                                         , lru_flush_rx
                                         , lru_persist_submit_ch
+                                        , evict_tries
                                         , waits.clone()); 
 
         // ================================================
