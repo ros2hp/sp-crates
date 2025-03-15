@@ -206,10 +206,12 @@ impl<K : Hash + Eq + Debug + Clone,V : Clone + Debug >  InnerCache<K,V>
     pub fn inuse(&self, key: &K) -> bool {
         //println!("InnerCache inuse [{:?}]",key);
         match self.inuse.get(key) {
-            None => {//println!("InnerCache inuse [{:?}] false ",key);
+            None => {
+                    //println!("InnerCache inuse [{:?}] false ",key);
                      false
                     },
-            Some(i) => {//println!("InnerCache inuse [{:?}] value {}) ",key,*i);
+            Some(i) => {
+                            //println!("InnerCache inuse [{:?}] value {}) ",key,*i);
                             *i > 0
                             },
         }

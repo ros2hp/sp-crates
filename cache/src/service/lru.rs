@@ -150,7 +150,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
             let mut lru_entry = lru_tail_entry.clone();
             let mut prev_lru_entry :Arc<Mutex<Entry<K>>> = lru_entry.clone();
 
-            while lc < evict_tries  {
+            while self.cnt >= self.capacity && lc < evict_tries  {
             
                 lc += 1;
                 // ================================
@@ -166,6 +166,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                     prev_lru_entry = lru_entry.clone();
                 }
                 let mut evict_entry = lru_entry.lock().await;
+                                println!("{} LRU: attach evict processing: try to evict key {:?} lc {}",task, evict_entry.key,lc);
                 // ================================
                 // Lock cache
                 // ================================
@@ -192,6 +193,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                             drop(evict_node_guard);
                             continue;
                         }
+                        //println!("{} LRU attach evict -  not in use evict node {:?} tries {}",task,evict_entry.key,lc);
                         cache_guard.set_persisting(evict_entry.key.clone());
                         // ============================
                         // remove node from cache
@@ -202,6 +204,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                         // ==================
                         if lc == 1 {
                             // from tail
+
                             match evict_entry.prev {
                                 None => {panic!("LRU attach - evict_entry - expected prev got None")}
                                 Some(ref new_tail) => {
@@ -212,6 +215,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                             }
                         } else {
                             // from further upper tail
+                            //println!("{} LRU attach evict -  evict from further up tail...",task);
                             let next_entry = evict_entry.next.as_ref().clone().unwrap().clone();
                             match evict_entry.prev {
                                 None => {panic!("LRU attach - evict_entry - expected prev got None")}
@@ -220,12 +224,10 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                                     prev_entry_guard.next = Some(next_entry.clone());
                                     let mut next_entry_guard = next_entry.lock().await;
                                     next_entry_guard.prev = Some(prev_entry.clone());
-                                }
+                                }                          
                             }
                         }
                     
-                        evict_entry.prev=None;
-                        evict_entry.next=None;
                         self.cnt-=1;
                         // =====================
                         // remove from lru lookup 
@@ -238,7 +240,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                         drop(evict_node_guard); // required by persist 
                         // ============================================
                         // notify persist service - don't wait for resp
-                        // ============================================
+                        // ============================================\
                         if let Err(err) = self
                             .persist_submit_ch
                             .send((task, evict_entry.key.clone(), arc_evict_node.clone()))
@@ -246,7 +248,6 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                         {
                             println!("{} LRU Error sending on Evict channel: [{}]", task,err);
                         }
-
                         // =====================================================================
                         // cache lock released - now that submit persist has been sent (queued)
                         // =====================================================================
@@ -255,7 +256,8 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                         // Abort eviction - as node is being accessed.
                         // TODO check if error is "node locked"
                         println!("{} LRU attach - lock cannot be acquired - abort eviction for {:?}",task, evict_entry.clone().key);
-                        break;
+                        drop(cache_guard);  
+                        continue;
                     }
                 }
                 self.waits.record(Event::LRUCacheLock, Instant::now().duration_since(before)).await;  
@@ -308,7 +310,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                 panic!("LRU INCONSISTENCY attach: expected LRU to have tail but got NONE")
         }
         self.cnt+=1;
-        //println!("{} LRU: attach add cnt {}",task, self.cnt);
+        println!("{} LRU: attach add cnt {}",task, self.cnt);
         }
         //self.print("attach").await;
     }
