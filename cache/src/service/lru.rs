@@ -142,121 +142,125 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
         // self.print("attach ").await;
         ////println!("   ");
         println!("{} LRU attach {:?}. ***********", task, key);  
-        let mut lc = 0;   
-        let lru_tail_entry = self.tail.as_ref().unwrap().clone();
-        let mut lru_entry = lru_tail_entry.clone();
-        let mut prev_lru_entry :Arc<Mutex<Entry<K>>> = lru_entry.clone();
 
-        while self.cnt >= self.capacity && lc < evict_tries  {
-        
-            lc += 1;
-            // ================================
-            // Evict the tail entry in the LRU 
-            // ================================
-            println!("{} LRU: attach reached LRU capacity - evict tail  lru.cnt {}  lc {}  key {:?}", task, self.cnt, lc,  key);
-            // unlink tail lru_entry from lru and notify evict service.
-            // Clone REntry as about to purge it from cache.
-            if lc > 1 {
-                let prev_lru_entry_=prev_lru_entry.clone();
-                let lru_entry_guard= prev_lru_entry_.lock().await;
-                lru_entry = lru_entry_guard.prev.as_ref().unwrap().clone();
-                prev_lru_entry = lru_entry.clone();
-            }
-            let mut evict_entry = lru_entry.lock().await;
-            // ================================
-            // Lock cache
-            // ================================
-            let before = Instant::now();
-            let mut cache_guard = cache.0.lock().await;
-            let Some(arc_evict_node_) = cache_guard.datax.get(&evict_entry.key)  
-                        else { println!("{} LRU: PANIC - attach evict processing: expect entry in cache {:?}",task, evict_entry.key);
-                               panic!("LRU: attach evict processing: expect entry in cache {:?} len {} ",evict_entry.key, cache_guard.datax.len());
-                            };
-            let arc_evict_node=arc_evict_node_.clone();
-            // ==========================
-            // acquire lock on evict node 
-            // ==========================
-            let tlock_result = arc_evict_node.try_lock();
-            match tlock_result {
+        if self.cnt >= self.capacity {
 
-                Ok(mut evict_node_guard)  => {
-                    // ============================
-                    // check state of entry in cache
-                    // ============================
-                    if cache_guard.inuse(&evict_entry.key) {
-                        println!("{} LRU attach evict -  cannot evict node as inuse set - abort eviction {:?} after tries {}", task, evict_entry.key, lc );
-                        //sleep(Duration::from_millis(10)).await;
-                        drop(evict_node_guard);
-                        continue;
-                    }
-                    cache_guard.set_persisting(evict_entry.key.clone());
-                    // ============================
-                    // remove node from cache
-                    // ============================
-                    cache_guard.datax.remove(&evict_entry.key);   
-                    // ==================
-                    // detach evict entry 
-                    // ==================
-                    if lc == 1 {
-                        // from tail
-                        match evict_entry.prev {
-                            None => {panic!("LRU attach - evict_entry - expected prev got None")}
-                            Some(ref new_tail) => {
-                                let mut tail_guard = new_tail.lock().await;
-                                tail_guard.next = None;
-                                self.tail = Some(new_tail.clone());
+            let mut lc = 0;  
+            let lru_tail_entry = self.tail.as_ref().unwrap().clone();
+            let mut lru_entry = lru_tail_entry.clone();
+            let mut prev_lru_entry :Arc<Mutex<Entry<K>>> = lru_entry.clone();
+
+            while lc < evict_tries  {
+            
+                lc += 1;
+                // ================================
+                // Evict the tail entry in the LRU 
+                // ================================
+                println!("{} LRU: attach reached LRU capacity - evict tail  lru.cnt {}  lc {}  key {:?}", task, self.cnt, lc,  key);
+                // unlink tail lru_entry from lru and notify evict service.
+                // Clone REntry as about to purge it from cache.
+                if lc > 1 {
+                    let prev_lru_entry_=prev_lru_entry.clone();
+                    let lru_entry_guard= prev_lru_entry_.lock().await;
+                    lru_entry = lru_entry_guard.prev.as_ref().unwrap().clone();
+                    prev_lru_entry = lru_entry.clone();
+                }
+                let mut evict_entry = lru_entry.lock().await;
+                // ================================
+                // Lock cache
+                // ================================
+                let before = Instant::now();
+                let mut cache_guard = cache.0.lock().await;
+                let Some(arc_evict_node_) = cache_guard.datax.get(&evict_entry.key)  
+                            else { println!("{} LRU: PANIC - attach evict processing: expect entry in cache {:?}",task, evict_entry.key);
+                                panic!("LRU: attach evict processing: expect entry in cache {:?} len {} ",evict_entry.key, cache_guard.datax.len());
+                                };
+                let arc_evict_node=arc_evict_node_.clone();
+                // ==========================
+                // acquire lock on evict node 
+                // ==========================
+                let tlock_result = arc_evict_node.try_lock();
+                match tlock_result {
+
+                    Ok(mut evict_node_guard)  => {
+                        // ============================
+                        // check state of entry in cache
+                        // ============================
+                        if cache_guard.inuse(&evict_entry.key) {
+                            println!("{} LRU attach evict -  cannot evict node as inuse set - abort eviction {:?} after tries {}", task, evict_entry.key, lc );
+                            //sleep(Duration::from_millis(10)).await;
+                            drop(evict_node_guard);
+                            continue;
+                        }
+                        cache_guard.set_persisting(evict_entry.key.clone());
+                        // ============================
+                        // remove node from cache
+                        // ============================
+                        cache_guard.datax.remove(&evict_entry.key);   
+                        // ==================
+                        // detach evict entry 
+                        // ==================
+                        if lc == 1 {
+                            // from tail
+                            match evict_entry.prev {
+                                None => {panic!("LRU attach - evict_entry - expected prev got None")}
+                                Some(ref new_tail) => {
+                                    let mut tail_guard = new_tail.lock().await;
+                                    tail_guard.next = None;
+                                    self.tail = Some(new_tail.clone());
+                                }
+                            }
+                        } else {
+                            // from further upper tail
+                            let next_entry = evict_entry.next.as_ref().clone().unwrap().clone();
+                            match evict_entry.prev {
+                                None => {panic!("LRU attach - evict_entry - expected prev got None")}
+                                Some(ref prev_entry) => {
+                                    let mut prev_entry_guard = prev_entry.lock().await;
+                                    prev_entry_guard.next = Some(next_entry.clone());
+                                    let mut next_entry_guard = next_entry.lock().await;
+                                    next_entry_guard.prev = Some(prev_entry.clone());
+                                }
                             }
                         }
-                    } else {
-                        // from further upper tail
-                        let next_entry = evict_entry.next.as_ref().clone().unwrap().clone();
-                        match evict_entry.prev {
-                            None => {panic!("LRU attach - evict_entry - expected prev got None")}
-                            Some(ref prev_entry) => {
-                                let mut prev_entry_guard = prev_entry.lock().await;
-                                prev_entry_guard.next = Some(next_entry.clone());
-                                let mut next_entry_guard = next_entry.lock().await;
-                                next_entry_guard.prev = Some(prev_entry.clone());
-                            }
+                    
+                        evict_entry.prev=None;
+                        evict_entry.next=None;
+                        self.cnt-=1;
+                        // =====================
+                        // remove from lru lookup 
+                        // =====================
+                        self.lookup.remove(&evict_entry.key);
+                        // ================================
+                        // release cache lock
+                        // ================================
+                        drop(cache_guard);  
+                        drop(evict_node_guard); // required by persist 
+                        // ============================================
+                        // notify persist service - don't wait for resp
+                        // ============================================
+                        if let Err(err) = self
+                            .persist_submit_ch
+                            .send((task, evict_entry.key.clone(), arc_evict_node.clone()))
+                            .await
+                        {
+                            println!("{} LRU Error sending on Evict channel: [{}]", task,err);
                         }
-                    }
-                
-                    evict_entry.prev=None;
-                    evict_entry.next=None;
-                    self.cnt-=1;
-                    // =====================
-                    // remove from lru lookup 
-                    // =====================
-                    self.lookup.remove(&evict_entry.key);
-                    // ================================
-                    // release cache lock
-                    // ================================
-                    drop(cache_guard);  
-                    drop(evict_node_guard); // required by persist 
-                    // ============================================
-                    // notify persist service - don't wait for resp
-                    // ============================================
-                    if let Err(err) = self
-                        .persist_submit_ch
-                        .send((task, evict_entry.key.clone(), arc_evict_node.clone()))
-                        .await
-                    {
-                        println!("{} LRU Error sending on Evict channel: [{}]", task,err);
-                    }
 
-                    // =====================================================================
-                    // cache lock released - now that submit persist has been sent (queued)
-                    // =====================================================================
+                        // =====================================================================
+                        // cache lock released - now that submit persist has been sent (queued)
+                        // =====================================================================
+                    }
+                    Err(err) =>  {
+                        // Abort eviction - as node is being accessed.
+                        // TODO check if error is "node locked"
+                        println!("{} LRU attach - lock cannot be acquired - abort eviction for {:?}",task, evict_entry.clone().key);
+                        break;
+                    }
                 }
-                Err(err) =>  {
-                    // Abort eviction - as node is being accessed.
-                    // TODO check if error is "node locked"
-                    println!("{} LRU attach - lock cannot be acquired - abort eviction for {:?}",task, evict_entry.clone().key);
-                    break;
-                }
+                self.waits.record(Event::LRUCacheLock, Instant::now().duration_since(before)).await;  
             }
-            self.waits.record(Event::LRUCacheLock, Instant::now().duration_since(before)).await;  
-        }
+        }      
         // ======================
         // attach to head of LRU
         // ======================
