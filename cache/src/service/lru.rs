@@ -165,7 +165,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                     lru_entry = lru_entry_guard.prev.as_ref().unwrap().clone();
                     prev_lru_entry = lru_entry.clone();
                 }
-                let mut evict_entry = lru_entry.lock().await;
+                let evict_entry = lru_entry.lock().await;
                                 println!("{} LRU: attach evict processing: try to evict key {:?} lc {}",task, evict_entry.key,lc);
                 // ================================
                 // Lock cache
@@ -183,7 +183,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                 let tlock_result = arc_evict_node.try_lock();
                 match tlock_result {
 
-                    Ok(mut evict_node_guard)  => {
+                    Ok(evict_node_guard)  => {
                         // ============================
                         // check state of entry in cache
                         // ============================

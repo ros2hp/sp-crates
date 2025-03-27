@@ -29,13 +29,11 @@ pub enum CacheValue<V> {
 #[trait_variant::make(Persistence: Send)]
 pub trait Persistence_<K, D> 
 {
-
     async fn persist(
         &mut self
         ,task : usize
         ,db : D
         ,waits : event_stats::Waits
-        ,persist_completed_send_ch : tokio::sync::mpsc::Sender<(K, usize)>
     );
 }
 
@@ -160,27 +158,27 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + std::marker::Sync + Se
 
         let (client_ch, mut client_rx) = tokio::sync::mpsc::channel::<()>(1); 
 
-        println!("cache: lru flush...");
+        println!("cache: shutdown lru flush...");
         let mut guard = self.0.lock().await;
         if let Err(err) = guard.lru_flush_ch.send(client_ch).await {
-                panic!("cache: LRU send on client_ch {} ",err);
+                panic!("cache: shutdown LRU send on client_ch {} ",err);
         };
         drop(guard);
 
-        println!("cache: waiting lru flush to finish...");
+        println!("cache: shutdown waiting lru flush to finish...");
         let _ = client_rx.recv().await;
-        println!("cache: sleep.. wait for LRU persists to finish..."); 
+        println!("cache: shutdown.. wait for LRU persists to finish..."); 
 
         guard = self.0.lock().await;
         if let Err(err) = guard.persist_shutdown_ch.send(1).await {
             panic!("cache: LRU send on persist_shutdown_ch {} ",err);
         };
-
+        println!("cache: shutdown.. wait for Persist to finish..."); 
         if let Some(ref mut persist) = guard.persist_srv {
+            println!("cache: shutdown .. wait persist to finish..."); 
             let _ = persist.await;
+            println!("cache: shutdown .. persist finished"); 
         }
-
-        //sleep(Duration::from_millis(5000)).await;
     }
 
 
