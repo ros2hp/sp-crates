@@ -145,6 +145,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
 
         if self.cnt >= self.capacity {
 
+            let before =Instant::now();
             let mut lc = 0;  
             let lru_tail_entry = self.tail.as_ref().unwrap().clone();
             let mut lru_entry = lru_tail_entry.clone();
@@ -240,7 +241,8 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                         drop(evict_node_guard); // required by persist 
                         // ============================================
                         // notify persist service - don't wait for resp
-                        // ============================================\
+                        // ============================================
+                        println!("{} LRU: attach evict - notify persist service to evict {:?}",task, evict_entry.key);
                         if let Err(err) = self
                             .persist_submit_ch
                             .send((task, evict_entry.key.clone(), arc_evict_node.clone()))
@@ -260,7 +262,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                         continue;
                     }
                 }
-                self.waits.record(Event::LRUCacheLock, Instant::now().duration_since(before)).await;  
+                self.waits.record(Event::LRUevicting, Instant::now().duration_since(before)).await;  
             }
         }      
         // ======================
