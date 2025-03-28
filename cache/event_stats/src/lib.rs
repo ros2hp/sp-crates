@@ -23,6 +23,7 @@ pub enum Event {
     Attach,
     GetInCache,
     GetNotInCache,
+    GetPersistingCheck,
     LRUevicting,
     // Dynamodb
     GetItem,
