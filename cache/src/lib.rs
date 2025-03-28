@@ -294,6 +294,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // sync'd: wait for LRU operation to complete - just like using a mutex is synchronous with operation.
                 let _ = srv_resp_rx.recv().await;
                 waits.record(event_stats::Event::Attach,Instant::now().duration_since(before)).await; 
+                waits.record(event_stats::Event::GetNotInCache,Instant::now().duration_since(before)).await; 
 
                 return CacheValue::New(arc_value.clone());
             }
@@ -333,6 +334,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 waits.record(event_stats::Event::LRUSendMove,Instant::now().duration_since(before)).await; 
                 let _ = srv_resp_rx.recv().await;
                 waits.record(event_stats::Event::MoveToHead,Instant::now().duration_since(before)).await;
+                waits.record(event_stats::Event::GetInCache,Instant::now().duration_since(before)).await; 
                 
                 return CacheValue::Existing(arc_value.clone());
             }
