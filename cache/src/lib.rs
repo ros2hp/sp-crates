@@ -256,6 +256,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
         let (lru_client_ch, mut srv_resp_rx) = tokio::sync::mpsc::channel::<bool>(1); 
 
         let before:Instant;  
+        let get_start = Instant::now();
         let mut cache_guard = self.0.lock().await;
         match cache_guard.datax.get(&key) {
             
@@ -294,7 +295,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // sync'd: wait for LRU operation to complete - just like using a mutex is synchronous with operation.
                 let _ = srv_resp_rx.recv().await;
                 waits.record(event_stats::Event::Attach,Instant::now().duration_since(before)).await; 
-                waits.record(event_stats::Event::GetNotInCache,Instant::now().duration_since(before)).await; 
+                waits.record(event_stats::Event::GetNotInCache,Instant::now().duration_since(get_start)).await; 
 
                 return CacheValue::New(arc_value.clone());
             }
@@ -334,7 +335,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 waits.record(event_stats::Event::LRUSendMove,Instant::now().duration_since(before)).await; 
                 let _ = srv_resp_rx.recv().await;
                 waits.record(event_stats::Event::MoveToHead,Instant::now().duration_since(before)).await;
-                waits.record(event_stats::Event::GetInCache,Instant::now().duration_since(before)).await; 
+                waits.record(event_stats::Event::GetInCache,Instant::now().duration_since(get_start)).await; 
                 
                 return CacheValue::Existing(arc_value.clone());
             }
