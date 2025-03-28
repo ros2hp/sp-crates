@@ -283,10 +283,13 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // =======================
                 // IS NODE BEING PERSISTED 
                 // =======================
+                before =Instant::now(); 
                 if persisting {
                     println!("{} CACHE: - Not Cached: waiting on persisting due to eviction {:?}",task, key);
                     self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;
                 }
+                waits.record(event_stats::Event::GetPersistingCheck,Instant::now().duration_since(get_start)).await;    
+
                 before =Instant::now();
                 if let Err(err) = lru_ch.send((task, key.clone(), before, lru_client_ch, lru::LruAction::Attach)).await {
                     panic!("Send on lru_attach_ch errored: {}", err);
