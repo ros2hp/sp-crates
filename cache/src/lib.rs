@@ -283,12 +283,12 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // =======================
                 // IS NODE BEING PERSISTED 
                 // =======================
-                before =Instant::now(); 
                 if persisting {
+                    before =Instant::now(); 
                     println!("{} CACHE: - Not Cached: waiting on persisting due to eviction {:?}",task, key);
                     self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;
+                    waits.record(event_stats::Event::GetPersistingCheckNotInCache,Instant::now().duration_since(get_start)).await;    
                 }
-                waits.record(event_stats::Event::GetPersistingCheckNotInCache,Instant::now().duration_since(get_start)).await;    
 
                 before =Instant::now();
                 if let Err(err) = lru_ch.send((task, key.clone(), before, lru_client_ch, lru::LruAction::Attach)).await {
@@ -326,12 +326,12 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // ======================
                 // IS NODE persisting 
                 // ======================
-                before =Instant::now(); 
                 if persisting {
+                    before =Instant::now(); 
                     println!("{} CACHE key: in CACHE check if still persisting ....{:?}", task,key);
-                    self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;     
+                    self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;    
+                    waits.record(event_stats::Event::GetPersistingCheckInCache,Instant::now().duration_since(get_start)).await;     
                 }
-                waits.record(event_stats::Event::GetPersistingCheckInCache,Instant::now().duration_since(get_start)).await;    
 
                 before =Instant::now();    
                 if let Err(err) = lru_ch.send((task, key.clone(), before, lru_client_ch, lru::LruAction::Move_to_head)).await {

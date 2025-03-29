@@ -24,7 +24,7 @@ pub enum LruAction {
 struct Entry<K: Hash + Eq + Debug>{
     pub key: K,
     //
-    pub next: Option<Arc<Mutex<Entry<K>>>>,  // TODO: as LRU is a service and Entry is local to service remove Mutex and Arc. NO - DOESN'T WORK.
+    pub next: Option<Arc<Mutex<Entry<K>>>>,  
     pub prev: Option<Arc<Mutex<Entry<K>>>>,
 }
 
