@@ -285,7 +285,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // =======================
                 if persisting {
                     before =Instant::now(); 
-                    println!("{} CACHE: - Not Cached: waiting on persisting due to eviction {:?}",task, key);
+                    //println!("{} CACHE: - Not Cached: waiting on persisting due to eviction {:?}",task, key);
                     self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;
                     waits.record(event_stats::Event::GetPersistingCheckNotInCache,Instant::now().duration_since(get_start)).await;    
                 }
@@ -328,7 +328,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // ======================
                 if persisting {
                     before =Instant::now(); 
-                    println!("{} CACHE key: in CACHE check if still persisting ....{:?}", task,key);
+                    //println!("{} CACHE key: in CACHE check if still persisting ....{:?}", task,key);
                     self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;    
                     waits.record(event_stats::Event::GetPersistingCheckInCache,Instant::now().duration_since(get_start)).await;     
                 }

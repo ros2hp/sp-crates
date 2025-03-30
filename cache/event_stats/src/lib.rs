@@ -11,6 +11,7 @@ pub enum Event {
     // channel waits
     LRUSendAttach,
     LRUSendMove, 
+    LRUSubmitRead,
     EvictWait,
     ChanPersistQuery,
     ChanPersistQueryResp,
@@ -33,7 +34,7 @@ pub enum Event {
     PersistOvbAppend,
     PersistMeta,
     // Cache
-    LRUCacheLock
+    //LRUCacheLock
 }
 
 #[derive(Clone,Debug)]

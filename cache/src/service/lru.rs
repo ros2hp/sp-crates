@@ -145,7 +145,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
 
         if self.cnt >= self.capacity {
 
-            let before =Instant::now();
+            //let before =Instant::now();
             let mut lc = 0;  
             let lru_tail_entry = self.tail.as_ref().unwrap().clone();
             let mut lru_entry = lru_tail_entry.clone();
@@ -153,6 +153,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
 
             while self.cnt >= self.capacity && lc < evict_tries  {
             
+                let before =Instant::now();
                 lc += 1;
                 // ================================
                 // Evict the tail entry in the LRU 
@@ -167,11 +168,11 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                     prev_lru_entry = lru_entry.clone();
                 }
                 let evict_entry = lru_entry.lock().await;
-                                println!("{} LRU: attach evict processing: try to evict key {:?} lc {}",task, evict_entry.key,lc);
+                println!("{} LRU: attach evict processing: try to evict key {:?} lc {}",task, evict_entry.key,lc);
                 // ================================
                 // Lock cache
                 // ================================
-                let before = Instant::now();
+                //let before = Instant::now();
                 let mut cache_guard = cache.0.lock().await;
                 let Some(arc_evict_node_) = cache_guard.datax.get(&evict_entry.key)  
                             else { println!("{} LRU: PANIC - attach evict processing: expect entry in cache {:?}",task, evict_entry.key);
@@ -205,7 +206,6 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                         // ==================
                         if lc == 1 {
                             // from tail
-
                             match evict_entry.prev {
                                 None => {panic!("LRU attach - evict_entry - expected prev got None")}
                                 Some(ref new_tail) => {
@@ -421,8 +421,8 @@ pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug +
     // 
     let (lru_client_ch, lru_client_rx) = tokio::sync::mpsc::channel::<bool>(1);
    
-    let mut lru = lru::LRU::new(lru_capacity, persist_submit_ch.clone(), waits);
-
+    let mut lru = lru::LRU::new(lru_capacity, persist_submit_ch.clone(), waits.clone());
+    
     let lru_server = tokio::task::spawn( async move { 
         println!("LRU service started....");
         loop {
@@ -431,6 +431,8 @@ pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug +
                 // note: recv() is cancellable, meaning select! can cancel a recv() without loosing data in the channel.
                 Some((task, key, sent_time, client_ch, action)) = lru_rx.recv() => {
 
+                        waits.record(event_stats::Event::LRUSubmitRead,Instant::now().duration_since(sent_time)).await;
+ 
                         match action {
                             LruAction::Attach => {
                                 println!("{} LRU delay {:?} LRU: action Attach {:?}",Instant::now().duration_since(sent_time).as_nanos(),task, key);
