@@ -147,13 +147,14 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
 
             //let before =Instant::now();
             let mut lc = 0;  
-            let lru_tail_entry = self.tail.as_ref().unwrap().clone();
+            let mut lru_tail_entry = self.tail.as_ref().unwrap().clone();
             let mut lru_entry = lru_tail_entry.clone();
             let mut prev_lru_entry :Arc<Mutex<Entry<K>>> = lru_entry.clone();
 
             while self.cnt >= self.capacity && lc < evict_tries  {
-            
-                let before =Instant::now();
+                let before =Instant::now();         
+                {
+
                 lc += 1;
                 // ================================
                 // Evict the tail entry in the LRU 
@@ -162,6 +163,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                 // unlink tail lru_entry from lru and notify evict service.
                 // Clone REntry as about to purge it from cache.
                 if lc > 1 {
+                    // try next in linked list 
                     let prev_lru_entry_=prev_lru_entry.clone();
                     let lru_entry_guard= prev_lru_entry_.lock().await;
                     lru_entry = lru_entry_guard.prev.as_ref().unwrap().clone();
@@ -215,8 +217,12 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                                 }
                             }
                         } else {
-                            // from further upper tail
-                            //println!("{} LRU attach evict -  evict from further up tail...",task);
+                            // remove entry further up from tail
+                            println!("{} LRU attach evict -  evict from further up tail... lc {}",task, lc);
+                            if let None = evict_entry.next {
+                                println!("PANIC: LRU attach evict -  evict_entry next is None expected Some; task {:?} lc {}",task, lc);
+                                panic!("LRU attach evict -  evict_entry next is None expected Some")
+                            }
                             let next_entry = evict_entry.next.as_ref().clone().unwrap().clone();
                             match evict_entry.prev {
                                 None => {panic!("LRU attach - evict_entry - expected prev got None")}
@@ -257,11 +263,17 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                     Err(err) =>  {
                         // Abort eviction - as node is being accessed.
                         // TODO check if error is "node locked"
-                        println!("{} LRU attach - lock cannot be acquired - abort eviction for {:?}",task, evict_entry.clone().key);
+                        println!("{} LRU attach - lock cannot be acquired - abort eviction for {:?} lc {}",task, evict_entry.clone().key,lc);
                         drop(cache_guard);  
                         continue;
                     }
                 }
+                }
+                // successfully removed tail entry reset lc
+                lc = 0;
+                lru_tail_entry = self.tail.as_ref().unwrap().clone();
+                prev_lru_entry  = lru_tail_entry.clone();
+                lru_entry = prev_lru_entry.clone();
                 self.waits.record(Event::LRUevicting, Instant::now().duration_since(before)).await;  
             }
         }      
