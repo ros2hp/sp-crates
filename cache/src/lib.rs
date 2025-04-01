@@ -19,7 +19,7 @@ use tokio::sync::Mutex;
 //pub use event_stats::{Waits,Event};
 
 
-const LRU_CAPACITY : usize = 40;
+//const LRU_CAPACITY : usize = 40;
 
 pub enum CacheValue<V> {
     New(V),
@@ -89,6 +89,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + std::marker::Sync + Se
         ,waits : event_stats::Waits
         ,evict_tries: usize
         ,db : D
+        ,lru_capacity : usize
     ) -> Self
     where V: Persistence<K,D>
    { 
@@ -117,7 +118,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + std::marker::Sync + Se
         let (lru_persist_submit_ch, persist_submit_rx) = tokio::sync::mpsc::channel::<(usize, K, Arc<Mutex<V>>)>(max_sp_tasks);
 
         let _ = service::lru::start_service::<K,V>(
-                                        LRU_CAPACITY
+                                        lru_capacity
                                         , cache.clone()
                                         , lru_operation_rx
                                         , lru_flush_rx

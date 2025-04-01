@@ -37,7 +37,7 @@ use tokio::time::{sleep, Duration, Instant};
 //use tokio::task::spawn;
 
 const DYNAMO_BATCH_SIZE: usize = 25;
-pub const LRU_CAPACITY: usize = 40;
+//pub const LRU_CAPACITY: usize = 40;
 
 const LS: u8 = 1;
 const LN: u8 = 2;
@@ -194,8 +194,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     let mysql_dbname =
         env::var("MYSQL_DBNAME").expect("env variable `MYSQL_DBNAME` should be set in profile");
     let max_sp_tasks_ =
-        env::var("MAX_SP_TASKS").expect("env variable `max_sp_tasks` should be set in profile");
+        env::var("MAX_SP_TASKS").expect("env variable `MAX_SP_TASKS` should be set in profile");
     let graph = env::var("GRAPH_NAME").expect("env variable `GRAPH_NAME` should be set in profile");
+    let lru_capacity_ = env::var("LRU_CAPACITY").expect("env variable `LRU_CAPACITY` should be set in profile");
     let table_name = "RustGraph.dev.10";
     let evict_tries = "3";
     // ===========================
@@ -203,13 +204,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     // ===========================
     println!("========== Config ===============  ");
     println!("Config: max_sp_tasks:   {}", max_sp_tasks_);
-    println!("Config: LRU_CAPACITY:   {}", LRU_CAPACITY);
+    println!("Config: lru_capacity:   {}", lru_capacity_);
     println!("Config: Table name:     {}", table_name);
     println!("Config: DateTime :      {:?}", Instant::now());
     println!("Config: Evict_Tries :   {:?}", evict_tries);
     println!("=================================  ");
 
     let max_sp_tasks = usize::from_str_radix(&max_sp_tasks_, 10).unwrap();
+    let lru_capacity = usize::from_str_radix(&lru_capacity_,10).unwrap();
     // ===========================
     // 2. Create a Dynamodb Client
     // ===========================
@@ -266,7 +268,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     // ===========================================
     let db: Dynamo = Dynamo::new(dynamo_client.clone(), table_name.to_string());
     let Ok(evict_tries_) = evict_tries.parse() else {  panic!("evict_tries cannot be parsed to usize")};
-    let reverse_edge_cache = Cache::<RKey, RNode>::new(max_sp_tasks, waits.clone(), evict_tries_, db);
+    let reverse_edge_cache = Cache::<RKey, RNode>::new(max_sp_tasks, waits.clone(), evict_tries_, db, lru_capacity);
 
     // ================================
     // 5. Setup a MySQL connection pool
