@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::task;
 use tokio::sync::Mutex;
 
-const MAX_PRESIST_TASKS: u8 = 8;
+const MAX_PRESIST_TASKS: u8 = 16;
 
 struct Lookup<K,V>(HashMap<K, Arc<Mutex<V>>>);
 
