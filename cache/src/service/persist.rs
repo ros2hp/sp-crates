@@ -86,9 +86,9 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
     println!("PERSIST  starting persist service: table ");
 
     //let mut persisted = Persisted::new(); // temmporary - initialise to zero ovb metadata when first persisted
-    let mut persisting_lookup = Lookup::new();
-    let mut pending_q = PendingQ::new();
-    let mut query_client = QueryClient::new();
+    let mut persisting_lookup: Lookup<K, V> = Lookup::new();
+    let mut pending_q: PendingQ<K> = PendingQ::new();
+    let mut query_client: QueryClient<K> = QueryClient::new();
     let mut tasks = 0;
     let mut shutdown = false;
 
@@ -109,8 +109,11 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                 // select! will be forced to cancel recv() if another branch event happens e.g. recv() on shutdown_rxannel.
                 Some((task, key, arc_node )) = submit_rx.recv() => {
 
-                    //  no locks acquired  - apart from Cache in async routine, which is therefore safe.
-
+                        // check if already submitted - 
+                        if persisting_lookup.0.contains_key(&key) {
+                            panic!("{} Persist service: submitted key again, persist yet to finish from previous submit {:?}",task, key);
+                        };
+ 
                         // persisting_lookup arc_node for given K
                         println!("{} PERSIST: submit persist for {:?} tasks [{}]",task, key, tasks);
                         persisting_lookup.0.insert(key.clone(), arc_node.clone());
