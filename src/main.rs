@@ -206,6 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     // ===========================
     println!("========== Config ===============  ");
     println!("Config: max_sp_tasks:   {}", max_sp_tasks_);
+    println!("Config: max_persist_tasks:   {}", max_persist_tasks_);
     println!("Config: lru_capacity:   {}", lru_capacity_);
     println!("Config: Table name:     {}", table_name);
     println!("Config: DateTime :      {:?}", Instant::now());
