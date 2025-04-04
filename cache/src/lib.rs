@@ -90,6 +90,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + std::marker::Sync + Se
         ,evict_tries: usize
         ,db : D
         ,lru_capacity : usize
+        ,persist_tasks : usize
     ) -> Self
     where V: Persistence<K,D>
    { 
@@ -138,6 +139,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + std::marker::Sync + Se
             persist_query_rx,
             persist_shutdown_rx,
             waits.clone(),
+            persist_tasks,
         );
 
         cache.set_persist_srv(persist_service);

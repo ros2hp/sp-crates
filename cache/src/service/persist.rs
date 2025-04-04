@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::task;
 use tokio::sync::Mutex;
 
-const MAX_PRESIST_TASKS: u8 = 16;
+//const MAX_PRESIST_TASKS: u8 = 16;
 
 struct Lookup<K,V>(HashMap<K, Arc<Mutex<V>>>);
 
@@ -77,6 +77,7 @@ pub(crate) fn start_service<K,V,D>(
     mut shutdown_rx: tokio::sync::mpsc::Receiver<u8>,
     //
     waits_ : Waits,
+    persist_tasks : usize
 ) -> task::JoinHandle<()> 
 where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static, 
       V: Clone + Persistence<K,D> + std::fmt::Debug + 'static,
@@ -94,7 +95,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
 
     // persist channel used to acknowledge to a waiting client that the associated node has completed persistion.
     let (persist_completed_send_ch, mut persist_completed_rx) =
-        tokio::sync::mpsc::channel::<(K,usize)>(MAX_PRESIST_TASKS as usize);
+        tokio::sync::mpsc::channel::<(K,usize)>(persist_tasks);
 
     let waits = waits_.clone();
 
@@ -118,7 +119,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                         println!("{} PERSIST: submit persist for {:?} tasks [{}]",task, key, tasks);
                         persisting_lookup.0.insert(key.clone(), arc_node.clone());
 
-                        if tasks >= MAX_PRESIST_TASKS {
+                        if tasks >= persist_tasks {
                             // maintain a FIFO of evicted nodes
                             println!("{} PERSIST: submit - max tasks reached add {:?} pending_q {}",task , key, pending_q.0.len());
                             pending_q.0.push_front(key.clone());                         
