@@ -2,7 +2,7 @@ use crate::Cache;
 use crate::Persistence;
 
 //extern crate event_stats;
-use event_stats::{Waits,Event};
+use event_stats::Waits;
 
 use crate::QueryMsg;
 
@@ -10,7 +10,9 @@ use std::collections::{HashMap,  VecDeque};
 use std::sync::Arc;
 
 use tokio::task;
+use tokio::time;
 use tokio::sync::Mutex;
+use tokio::time::Instant;
 
 //const MAX_PRESIST_TASKS: u8 = 16;
 
@@ -30,22 +32,6 @@ struct PendingQ<K>(VecDeque<K>);
 impl<K: std::cmp::PartialEq> PendingQ<K> {
     fn new() -> Self {
         PendingQ::<K>(VecDeque::new())
-    }
-
-    fn remove(&mut self, K: &K) {
-        let mut ri = 0;
-        let mut found = false;
-
-        for (i,v) in self.0.iter().enumerate() {
-            if *v == *K {
-                ri = i;
-                found = true;
-                break;
-            }
-        }
-        if found {
-            self.0.remove(ri);
-        }
     }
 }
 
@@ -72,7 +58,7 @@ pub(crate) fn start_service<K,V,D>(
     cache: Cache<K,V>,
     db : D,
     // channels
-    mut submit_rx: tokio::sync::mpsc::Receiver<(usize, K, Arc<Mutex<V>>)>,
+    mut submit_rx: tokio::sync::mpsc::Receiver<(usize, K, Arc<Mutex<V>>, tokio::time::Instant)>,
     mut client_query_rx: tokio::sync::mpsc::Receiver<QueryMsg<K>>,
     mut shutdown_rx: tokio::sync::mpsc::Receiver<u8>,
     //
@@ -95,7 +81,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
 
     // persist channel used to acknowledge to a waiting client that the associated node has completed persistion.
     let (persist_completed_send_ch, mut persist_completed_rx) =
-        tokio::sync::mpsc::channel::<(K,usize)>(persist_tasks);
+        tokio::sync::mpsc::channel::<(K,usize,tokio::time::Instant)>(persist_tasks);
 
     let waits = waits_.clone();
 
@@ -108,8 +94,10 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                 biased;         // removes random number generation - normal processing will determine order so select! can follow it.
                 // note: recv() is cancellable, meaning select! can cancel a recv() without loosing data in the channel.
                 // select! will be forced to cancel recv() if another branch event happens e.g. recv() on shutdown_rxannel.
-                Some((task, key, arc_node )) = submit_rx.recv() => {
+                Some((task, key, arc_node, sent_time)) = submit_rx.recv() => {
 
+                        waits.record(event_stats::Event::ChanPersistSubmitRcv,Instant::now().duration_since(sent_time)).await;
+ 
                         // check if already submitted - 
                         if persisting_lookup.0.contains_key(&key) {
                             panic!("{} Persist service: submitted key again, persist yet to finish from previous submit {:?}",task, key);
@@ -146,7 +134,8 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                                     ,waits
                                 ).await;
                                 // send task completed msg to self
-                                if let Err(err) = persist_completed_send_ch_.send((key.clone(), task)).await {
+                                let before = Instant::now();
+                                if let Err(err) = persist_completed_send_ch_.send((key.clone(), task, before)).await {
                                             println!(
                                                     "Sending completed persist msg to waiting client failed: {}",
                                                             err
@@ -158,8 +147,10 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
 
                 },
 
-                Some((persist_key,task)) = persist_completed_rx.recv() => {
+                Some((persist_key, task, sent_time)) = persist_completed_rx.recv() => {
 
+                    waits.record(event_stats::Event::ChanPersistCompleteRcv,Instant::now().duration_since(sent_time)).await;
+ 
                     tasks-=1;
 
                     println!("{} PERSIST : completed msg:  key {:?} tasks {}, pending_q {}", task, persist_key, tasks,pending_q.0.len());
@@ -205,7 +196,8 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                                 ,waits
                             ).await;
                             // send task completed msg to self
-                            if let Err(err) = persist_completed_send_ch_.send((queued_Key.clone(), task)).await {
+                            let before=Instant::now();
+                            if let Err(err) = persist_completed_send_ch_.send((queued_Key.clone(), task, before)).await {
                                             println!(
                                                 "Sending completed persist msg to waiting client failed: {}",
                                                 err
@@ -286,7 +278,8 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                                         ,waits
                                     ).await;
                                     // send task completed msg to self
-                                    if let Err(err) = persist_completed_send_ch_.send((queued_Key.clone(), 0)).await {
+                                    let before = Instant::now();
+                                    if let Err(err) = persist_completed_send_ch_.send((queued_Key.clone(), 0, before)).await {
                                         println!(
                                             "Sending completed persist msg to waiting client failed: {}",
                                             err

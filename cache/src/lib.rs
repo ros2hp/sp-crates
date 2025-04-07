@@ -11,12 +11,8 @@ use std::collections::HashMap;
 
 use crate::service::lru;
 
-use tokio::time::{sleep, Duration, Instant};
+use tokio::time::Instant;
 use tokio::sync::Mutex;
-// ===========
-// re-export
-// ===========
-//pub use event_stats::{Waits,Event};
 
 
 //const LRU_CAPACITY : usize = 40;
@@ -116,7 +112,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + std::marker::Sync + Se
         // =========================================
         // 4. create channels and start LRU service 
         // ======================================== 
-        let (lru_persist_submit_ch, persist_submit_rx) = tokio::sync::mpsc::channel::<(usize, K, Arc<Mutex<V>>)>(max_sp_tasks);
+        let (lru_persist_submit_ch, persist_submit_rx) = tokio::sync::mpsc::channel::<(usize, K, Arc<Mutex<V>>, Instant)>(max_sp_tasks);
 
         let _ = service::lru::start_service::<K,V>(
                                         lru_capacity
@@ -258,8 +254,8 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
     ) -> CacheValue<Arc<tokio::sync::Mutex<V>>> {
         let (lru_client_ch, mut srv_resp_rx) = tokio::sync::mpsc::channel::<bool>(1); 
 
-        let mut before:Instant;  
-        let get_start = Instant::now();
+        let mut before:Instant = Instant::now();;  
+        let start_time = before;
         let mut cache_guard = self.0.lock().await;
         match cache_guard.datax.get(&key) {
             
@@ -290,18 +286,18 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                     before =Instant::now(); 
                     println!("{} CACHE: - Not Cached: waiting on persisting due to eviction {:?}",task, key);
                     self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;
-                    waits.record(event_stats::Event::GetPersistingCheckNotInCache,Instant::now().duration_since(get_start)).await;    
+                    waits.record(event_stats::Event::GetPersistingCheckNotInCache,Instant::now().duration_since(start_time)).await;    
                 }
 
-                before =Instant::now();
-                if let Err(err) = lru_ch.send((task, key.clone(), before, lru_client_ch, lru::LruAction::Attach)).await {
+                before = Instant::now();
+                if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::Attach)).await {
                     panic!("Send on lru_attach_ch errored: {}", err);
                 }   
-                waits.record(event_stats::Event::LRUSendAttach,Instant::now().duration_since(before)).await;    
+                waits.record(event_stats::Event::ChanLRUAttachSend,Instant::now().duration_since(before)).await;    
                 // sync'd: wait for LRU operation to complete - just like using a mutex is synchronous with operation.
                 let _ = srv_resp_rx.recv().await;
-                waits.record(event_stats::Event::Attach,Instant::now().duration_since(before)).await; 
-                waits.record(event_stats::Event::GetNotInCache,Instant::now().duration_since(get_start)).await; 
+
+                waits.record(event_stats::Event::GetNotInCache,Instant::now().duration_since(start_time)).await; 
 
                 return CacheValue::New(arc_value.clone());
             }
@@ -333,17 +329,15 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                     before =Instant::now(); 
                     //println!("{} CACHE key: in CACHE check if still persisting ....{:?}", task,key);
                     self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;    
-                    waits.record(event_stats::Event::GetPersistingCheckInCache,Instant::now().duration_since(get_start)).await;     
+                    waits.record(event_stats::Event::GetPersistingCheckInCache,Instant::now().duration_since(before)).await;     
                 }
-
-                before =Instant::now();    
-                if let Err(err) = lru_ch.send((task, key.clone(), before, lru_client_ch, lru::LruAction::Move_to_head)).await {
+   
+                if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::Move_to_head)).await {
                     panic!("Send on lru_move_to_head_ch failed {}",err)
                 };
-                waits.record(event_stats::Event::LRUSendMove,Instant::now().duration_since(before)).await; 
                 let _ = srv_resp_rx.recv().await;
-                waits.record(event_stats::Event::MoveToHead,Instant::now().duration_since(before)).await;
-                waits.record(event_stats::Event::GetInCache,Instant::now().duration_since(get_start)).await; 
+
+                waits.record(event_stats::Event::GetInCache,Instant::now().duration_since(start_time)).await; 
                 
                 return CacheValue::Existing(arc_value.clone());
             }

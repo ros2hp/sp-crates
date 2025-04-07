@@ -1,4 +1,5 @@
 use super::*;
+pub extern crate event_stats;   
 //extern crate event_stats;
 
 use crate::Cache;
@@ -10,7 +11,7 @@ use std::fmt::Debug;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::time::{sleep, Duration, Instant};
+use tokio::time::Instant;
 use tokio::sync::Mutex;
 
 pub enum LruAction {
@@ -52,7 +53,7 @@ struct LRU<K: Hash + Eq + Debug,V> {
     // pointer to Entry value in the LRU linked list for a K
     lookup : HashMap<K,Arc<Mutex<Entry<K>>>>,
     //
-    persist_submit_ch: tokio::sync::mpsc::Sender<(usize, K, Arc<Mutex<V>>)>,
+    persist_submit_ch: tokio::sync::mpsc::Sender<(usize, K, Arc<Mutex<V>>, Instant)>,
     // record stat waits
     waits : Waits,
     //
@@ -93,7 +94,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
 {  
     pub fn new(
         cap: usize,
-        persist_submit_ch: tokio::sync::mpsc::Sender<(usize, K, Arc<tokio::sync::Mutex<V>>)>,
+        persist_submit_ch: tokio::sync::mpsc::Sender<(usize, K, Arc<tokio::sync::Mutex<V>>, Instant)>,
         waits : Waits
     ) -> Self {
         LRU{
@@ -142,6 +143,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
         // self.print("attach ").await;
         ////println!("   ");
         println!("{} LRU attach {:?}. ***********", task, key);  
+        let start_time = Instant::now();
 
         if self.cnt >= self.capacity {
 
@@ -250,7 +252,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                             println!("{} LRU: attach evict - notify persist service to evict {:?}",task, evict_entry.key);
                             if let Err(err) = self
                                 .persist_submit_ch
-                                .send((task, evict_entry.key.clone(), arc_evict_node.clone()))
+                                .send((task, evict_entry.key.clone(), arc_evict_node.clone(), Instant::now()))
                                 .await
                             {
                                 println!("{} LRU Error sending on Evict channel: [{}]", task,err);
@@ -275,6 +277,8 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                 lru_entry = prev_lru_entry.clone();
 
                 self.waits.record(Event::LRUevicting, Instant::now().duration_since(before)).await;  
+
+                self.waits.record(event_stats::Event::LRUAttach,Instant::now().duration_since(start_time)).await; 
             }
         }      
         // ======================
@@ -326,6 +330,9 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
         self.cnt+=1;
         println!("{} LRU: attach add cnt {}",task, self.cnt);
         }
+
+        self.waits.record(event_stats::Event::LRUAttach,Instant::now().duration_since(start_time)).await; 
+ 
         //self.print("attach").await;
     }
     
@@ -337,82 +344,87 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
         task : usize,
         key: K,
     ) {  
-         {
-        //println!("--------------");
-        println!("{} LRU move_to_head {:?} ********",task, key);
-        // abort if lru_entry is at head of lru
-        match self.head {
-            None => {
-                panic!("{} LRU empty - expected entries",task);
-            }
-            Some(ref v) => {
-                let hd: K = v.lock().await.key.clone();
-                if hd == key {
-                    // k already at head
-                    return
-                }    
-            }
-        }
-        // lookup entry in map
-        let lru_entry = match self.lookup.get(&key) {
-            None => {  
-                    println!("{} PANIC LRU INCONSISTENCY no lookup entry durin move-to-head - Reason: task maybe running out of order. {:?}",task, key);
-                    panic!("{} LRU INCONSISTENCY no lookup entry - tasks running out of order. {:?}",task, key);
-                    }
-            Some(v) => v.clone()
-        };
+        let start_time = Instant::now();
         {
-            // DETACH the entry before attaching to LRU head
-            
-            let lru_entry_guard = lru_entry.lock().await;
-            // NEW CODE to fix eviction and new request at same time on a Node
-            if let None = lru_entry_guard.prev {
-                ////println!("LRU INCONSISTENCY move_to_head: expected entry to have prev but got NONE {:?}",k);
-                if let None = lru_entry_guard.next {
-                    // should not happend
-                    panic!("{} LRU move_to_head : got a entry with no prev or next set (ie. a new node) - some synchronisation gone astray",task)
+        
+            //println!("--------------");
+            println!("{} LRU move_to_head {:?} ********",task, key);
+            // abort if lru_entry is at head of lru
+            match self.head {
+                None => {
+                    panic!("{} LRU empty - expected entries",task);
+                }
+                Some(ref v) => {
+                    let hd: K = v.lock().await.key.clone();
+                    if hd == key {
+                        // k already at head
+                        return
+                    }    
                 }
             }
-
-            // check if moving tail entry
-            if let None = lru_entry_guard.next {
-            
-                println!("{} LRU move_to_head detach tail entry {:?}",task, key);
-                let mut prev_guard = lru_entry_guard.prev.as_ref().unwrap().lock().await;
-                prev_guard.next = None;
-                self.tail = Some(lru_entry_guard.prev.as_ref().unwrap().clone());
+            // lookup entry in map
+            let lru_entry = match self.lookup.get(&key) {
+                None => {  
+                        println!("{} PANIC LRU INCONSISTENCY no lookup entry durin move-to-head - Reason: task maybe running out of order. {:?}",task, key);
+                        panic!("{} LRU INCONSISTENCY no lookup entry - tasks running out of order. {:?}",task, key);
+                        }
+                Some(v) => v.clone()
+            };
+            {
+                // DETACH the entry before attaching to LRU head
                 
-            } else {
-                
-                let mut prev_guard = lru_entry_guard.prev.as_ref().unwrap().lock().await;
-                let mut next_guard = lru_entry_guard.next.as_ref().unwrap().lock().await;
+                let lru_entry_guard = lru_entry.lock().await;
+                // NEW CODE to fix eviction and new request at same time on a Node
+                if let None = lru_entry_guard.prev {
+                    ////println!("LRU INCONSISTENCY move_to_head: expected entry to have prev but got NONE {:?}",k);
+                    if let None = lru_entry_guard.next {
+                        // should not happend
+                        panic!("{} LRU move_to_head : got a entry with no prev or next set (ie. a new node) - some synchronisation gone astray",task)
+                    }
+                }
 
-                prev_guard.next = Some(lru_entry_guard.next.as_ref().unwrap().clone());
-                next_guard.prev = Some(lru_entry_guard.prev.as_ref().unwrap().clone());
-       
-            }
-            println!("{} LRU move_to_head Detach complete...{:?}",task, key);
-        }
-        // ATTACH
-        let mut lru_entry_guard = lru_entry.lock().await;
-        lru_entry_guard.next = self.head.clone();
+                // check if moving tail entry
+                if let None = lru_entry_guard.next {
+                
+                    println!("{} LRU move_to_head detach tail entry {:?}",task, key);
+                    let mut prev_guard = lru_entry_guard.prev.as_ref().unwrap().lock().await;
+                    prev_guard.next = None;
+                    self.tail = Some(lru_entry_guard.prev.as_ref().unwrap().clone());
+                    
+                } else {
+                    
+                    let mut prev_guard = lru_entry_guard.prev.as_ref().unwrap().lock().await;
+                    let mut next_guard = lru_entry_guard.next.as_ref().unwrap().lock().await;
+
+                    prev_guard.next = Some(lru_entry_guard.next.as_ref().unwrap().clone());
+                    next_guard.prev = Some(lru_entry_guard.prev.as_ref().unwrap().clone());
         
-        // adjust old head entry previous pointer to new entry (aka LRU head)
-        match self.head {
-            None => {
-                 panic!("LRU empty - expected entries");
+                }
+                println!("{} LRU move_to_head Detach complete...{:?}",task, key);
             }
-            Some(ref v) => {
-                let mut hd = v.lock().await;
-                hd.prev = Some(lru_entry.clone());
-                println!("{} LRU move_to_head: attach old head {:?} prev to {:?} ",task, hd.key, lru_entry_guard.key);
+            // ATTACH
+            let mut lru_entry_guard = lru_entry.lock().await;
+            lru_entry_guard.next = self.head.clone();
+            
+            // adjust old head entry previous pointer to new entry (aka LRU head)
+            match self.head {
+                None => {
+                    panic!("LRU empty - expected entries");
+                }
+                Some(ref v) => {
+                    let mut hd = v.lock().await;
+                    hd.prev = Some(lru_entry.clone());
+                    println!("{} LRU move_to_head: attach old head {:?} prev to {:?} ",task, hd.key, lru_entry_guard.key);
+                }
             }
-        }
-        lru_entry_guard.prev = None;
-        self.head = Some(lru_entry.clone());
+            lru_entry_guard.prev = None;
+            self.head = Some(lru_entry.clone());
         }
         //self.print("move2head").await;
         println!("{} LRU move_to_head complete...{:?}",task, key);
+
+        self.waits.record(event_stats::Event::LRUMoveToHead,Instant::now().duration_since(start_time)).await; 
+ 
     }
 }
 
@@ -424,7 +436,7 @@ pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug +
         ,mut lru_rx : tokio::sync::mpsc::Receiver<(usize, K, Instant,tokio::sync::mpsc::Sender<bool>, LruAction)>
         ,mut lru_flush_rx : tokio::sync::mpsc::Receiver<tokio::sync::mpsc::Sender<()>>
         //
-        ,persist_submit_ch : tokio::sync::mpsc::Sender<(usize, K, Arc<Mutex<V>>)>
+        ,persist_submit_ch : tokio::sync::mpsc::Sender<(usize, K, Arc<Mutex<V>>, Instant)>
         //
         ,evict_tries : usize
         ,waits : Waits
@@ -443,7 +455,7 @@ pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug +
                 // note: recv() is cancellable, meaning select! can cancel a recv() without loosing data in the channel.
                 Some((task, key, sent_time, client_ch, action)) = lru_rx.recv() => {
 
-                        waits.record(event_stats::Event::LRUSubmitRead,Instant::now().duration_since(sent_time)).await;
+                        waits.record(event_stats::Event::ChanLRURcv,Instant::now().duration_since(sent_time)).await;
  
                         match action {
                             LruAction::Attach => {
@@ -473,7 +485,7 @@ pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug +
                                             let k = entry_.lock().await.key.clone();
                                             if let Some(arc_node) = cache_guard.datax.get(&k) {
                                                 if let Err(err) = lru.persist_submit_ch // persist_flush_ch
-                                                            .send((0, k, arc_node.clone()))
+                                                            .send((0, k, arc_node.clone(), Instant::now()))
                                                             .await {
                                                                 println!("Error on persist_submit_ch channel [{}]",err);
                                                             }
