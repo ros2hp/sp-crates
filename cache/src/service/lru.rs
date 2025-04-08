@@ -278,7 +278,6 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
 
                 self.waits.record(Event::LRUevicting, Instant::now().duration_since(before)).await;  
 
-                self.waits.record(event_stats::Event::LRUAttach,Instant::now().duration_since(start_time)).await; 
             }
         }      
         // ======================
