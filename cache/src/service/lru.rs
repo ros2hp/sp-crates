@@ -249,7 +249,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                             // ============================================
                             // notify persist service - don't wait for resp
                             // ============================================
-                            println!("{} LRU: attach evict - notify persist service to evict {:?}",task, evict_entry.key);
+                            println!("{} LRU: attach evict - notify persist service to persist {:?}",task, evict_entry.key);
                             if let Err(err) = self
                                 .persist_submit_ch
                                 .send((task, evict_entry.key.clone(), arc_evict_node.clone(), Instant::now()))

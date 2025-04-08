@@ -32,7 +32,7 @@ pub enum Event {
     LRUevicting,
     GetNotInCacheGet,
     GetInCacheGet,
-    GetNotInCacheAcquireLock,
+    GetCacheAcquireLock,
     GetNotInCacheValueLock,
     GetInCacheMoveToHeadResp,
     // Dynamodb

@@ -258,7 +258,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
         let start_time = before;
         let mut cache_guard = self.0.lock().await;
         let waits = cache_guard.waits.clone();
-        waits.record(event_stats::Event::GetNotInCacheAcquireLock,Instant::now().duration_since(start_time)).await; 
+        waits.record(event_stats::Event::GetCacheAcquireLock,Instant::now().duration_since(start_time)).await; 
         
         before  = Instant::now();  
         match cache_guard.datax.get(&key) {
@@ -291,7 +291,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                     before =Instant::now(); 
                     println!("{} CACHE: - Not Cached: waiting on persisting due to eviction {:?}",task, key);
                     self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;
-                    waits.record(event_stats::Event::GetPersistingCheckNotInCache,Instant::now().duration_since(start_time)).await;    
+                    waits.record(event_stats::Event::GetPersistingCheckNotInCache,Instant::now().duration_since(before)).await;    
                 }
 
                 before = Instant::now();
