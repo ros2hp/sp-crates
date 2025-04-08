@@ -30,6 +30,11 @@ pub enum Event {
     GetPersistingCheckInCache,
     GetPersistingCheckNotInCache,
     LRUevicting,
+    GetNotInCacheGet,
+    GetInCacheGet,
+    GetNotInCacheAcquireLock,
+    GetNotInCacheValueLock,
+    GetInCacheMoveToHeadResp,
     // Dynamodb
     GetItem,
     PersistEmbedded,

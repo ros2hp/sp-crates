@@ -254,15 +254,20 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
     ) -> CacheValue<Arc<tokio::sync::Mutex<V>>> {
         let (lru_client_ch, mut srv_resp_rx) = tokio::sync::mpsc::channel::<bool>(1); 
 
-        let mut before:Instant = Instant::now();;  
+        let mut before:Instant = Instant::now();  
         let start_time = before;
         let mut cache_guard = self.0.lock().await;
+        let waits = cache_guard.waits.clone();
+        waits.record(event_stats::Event::GetNotInCacheAcquireLock,Instant::now().duration_since(start_time)).await; 
+        
+        before  = Instant::now();  
         match cache_guard.datax.get(&key) {
             
             None => {
+
+                waits.record(event_stats::Event::GetInCacheGet,Instant::now().duration_since(before)).await; 
                 println!("{} CACHE: - Not Cached: add to cache {:?}", task, key);
                 let lru_ch = cache_guard.lru_ch.clone();
-                let waits = cache_guard.waits.clone();
                 let persist_query_ch = cache_guard.persist_query_ch.clone();
                 let arc_value = V::new_with_key(key);
                 // =========================
@@ -307,6 +312,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 //println!("key add_reverse_edge: - Cached key {:?}", task, self);
                 // acquire lock on value and release cache lock - this prevents concurrent updates to value 
                 // and optimises cache concurrency by releasing lock asap
+                waits.record(event_stats::Event::GetNotInCacheGet,Instant::now().duration_since(before)).await; 
                 let arc_value=arc_value.clone();
 
                 let persist_query_ch = cache_guard.persist_query_ch.clone();
@@ -321,21 +327,25 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // =============================================
                 // serialise processing on concurrent key-value
                 // =============================================
+                before = Instant::now();  
                 let value_guard = arc_value.lock().await;
+                waits.record(event_stats::Event::GetNotInCacheValueLock,Instant::now().duration_since(before)).await; 
+   
                 // ======================
                 // IS NODE persisting 
                 // ======================
                 if persisting {
-                    before =Instant::now(); 
+                    before = Instant::now(); 
                     //println!("{} CACHE key: in CACHE check if still persisting ....{:?}", task,key);
                     self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;    
                     waits.record(event_stats::Event::GetPersistingCheckInCache,Instant::now().duration_since(before)).await;     
                 }
-   
+                before = Instant::now(); 
                 if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::Move_to_head)).await {
                     panic!("Send on lru_move_to_head_ch failed {}",err)
                 };
                 let _ = srv_resp_rx.recv().await;
+                waits.record(event_stats::Event::GetInCacheMoveToHeadResp,Instant::now().duration_since(start_time)).await; 
 
                 waits.record(event_stats::Event::GetInCache,Instant::now().duration_since(start_time)).await; 
                 
