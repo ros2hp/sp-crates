@@ -66,6 +66,7 @@ impl RNode {
         rkey: &RKey,
         task: usize,
     ) {
+        println!("{} load_ovb_metadata: {:?}",task, rkey);
         let projection = types::CNT.to_string()
             + ","
             + types::OVB

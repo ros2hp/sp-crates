@@ -675,7 +675,7 @@ async fn persist(
     task: usize,
     dyn_client: &DynamoClient,
     table_name: &str, //
-    cache: Cache<RKey, RNode>, //
+    mut cache: Cache<RKey, RNode>, //
     mut bat_w_req: Vec<WriteRequest>,
     add_rvs_edge: bool, //
     target_uid: Uuid,
@@ -783,7 +783,7 @@ async fn persist(
                             task,
                             dyn_client,
                             table_name, //
-                            cache.clone(), //
+                            &mut cache.clone(), //
                             &target_uid,
                             id,
                         )
@@ -898,7 +898,7 @@ async fn persist(
                                     task,
                                     dyn_client,
                                     table_name, //
-                                    cache.clone(), //
+                                    &mut cache.clone(), //
                                     &ovb,
                                     id,
                                 )
@@ -1004,7 +1004,7 @@ async fn persist(
                                     task,
                                     dyn_client,
                                     table_name, //
-                                    cache.clone(), //
+                                    &mut cache.clone(), //
                                     &ovb,
                                     id,
                                 )
