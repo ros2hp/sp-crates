@@ -308,6 +308,16 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // serialise access to value - prevents concurrent operations on key
                 // ===============================================================                
                 let value_guard = arc_value.lock().await;
+                // ===========
+                // LRU Attach
+                // ===========
+                before = Instant::now();
+                if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::Attach)).await {
+                    panic!("Send on lru_attach_ch errored: {}", err);
+                }   
+                waits.record(event_stats::Event::ChanLRUAttachSend,Instant::now().duration_since(before)).await;    
+                // sync'd: wait for LRU operation to complete - just like using a mutex is synchronous with operation.
+                let _ = srv_resp_rx.recv().await;
                 // ============================================================================================================
                 // release cache lock with value still locked - value now in cache, so next get on key will go to in-cache path
                 // ============================================================================================================
@@ -321,16 +331,6 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                     self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;
                     waits.record(event_stats::Event::GetPersistingCheckNotInCache,Instant::now().duration_since(before)).await;    
                 }
-                // ===========
-                // LRU Attach
-                // ===========
-                before = Instant::now();
-                if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::Attach)).await {
-                    panic!("Send on lru_attach_ch errored: {}", err);
-                }   
-                waits.record(event_stats::Event::ChanLRUAttachSend,Instant::now().duration_since(before)).await;    
-                // sync'd: wait for LRU operation to complete - just like using a mutex is synchronous with operation.
-                let _ = srv_resp_rx.recv().await;
 
                 waits.record(event_stats::Event::GetNotInCache,Instant::now().duration_since(start_time)).await; 
 
