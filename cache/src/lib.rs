@@ -217,19 +217,17 @@ impl<K : Hash + Eq + Debug + Clone,V : Clone + Debug >  InnerCache<K,V>
     }
 
     pub fn set_loading(&mut self, key: K) {
-        println!("Cache: set_loading {:?}",&key);
         self.loading.insert(key);
     }
 
     pub fn unset_loading(&mut self, key: &K) {
-        println!("Cache: unset_loading {:?}",key);
         self.loading.remove(key);
     }
 
     pub fn loading(&self, key: &K) -> bool {
         match self.loading.get(key) {
-            None => {println!("Cache: NOT loading...{:?}",key); false},
-            Some(_) => {println!("Cache: loading...{:?}",key); true},
+            None => false,
+            Some(_) => true,
         }
     }
 
