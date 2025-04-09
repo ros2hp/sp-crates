@@ -241,11 +241,6 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                             // remove from lru lookup 
                             // =====================
                             self.lookup.remove(&evict_entry.key);
-                            // ================================
-                            // release cache lock
-                            // ================================
-                            drop(cache_guard);  
-                            drop(evict_node_guard); // required by persist 
                             // ============================================
                             // notify persist service - don't wait for resp
                             // ============================================
@@ -260,6 +255,8 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                             // =====================================================================
                             // cache lock released - now that submit persist has been sent (queued)
                             // =====================================================================
+                            drop(cache_guard);  
+                            drop(evict_node_guard); // required by persist 
                         }
                         Err(err) =>  {
                             // Abort eviction - as node is being accessed.

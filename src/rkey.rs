@@ -24,9 +24,7 @@ impl RKey {
         target: &Uuid,
         id: usize,
     ) {
-        //println!("{} ------------------------------------------------ {:?}",task, self);
-        //println!("{} RKEY add_reverse_edge: about to get  {:?} ",task, self);
-
+        
         match cache.get(&self, task).await {
             
             CacheValue::New(node) => {
@@ -37,8 +35,9 @@ impl RKey {
                     .load_ovb_metadata(dyn_client, table_name, self, task)
                     .await;
                 node_guard.add_reverse_edge(target.clone(), id as u32);
-                cache.save(&self).await;
-                //println!("add_reverse_edge: New exiting...");
+                
+                cache.release(&self).await;
+          
             }
 
             CacheValue::Existing(node) => {
@@ -47,8 +46,7 @@ impl RKey {
 
                 node_guard.add_reverse_edge(target.clone(), id as u32);
 
-                cache.save(self).await;
-                //println!("add_reverse_edge: Existing exiting...");
+                cache.release(self).await;
             }
         }
     }
