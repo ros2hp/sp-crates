@@ -27,7 +27,7 @@ impl RKey {
         //println!("{} ------------------------------------------------ {:?}",task, self);
         //println!("{} RKEY add_reverse_edge: about to get  {:?} ",task, self);
 
-        match cache.clone().get(&self, task).await {
+        match cache.get(&self, task).await {
             
             CacheValue::New(node) => {
                 //println!("{} RKEY add_reverse_edge: New  1 {:?} ", task, self);
@@ -47,7 +47,7 @@ impl RKey {
 
                 node_guard.add_reverse_edge(target.clone(), id as u32);
 
-                cache.unlock(self).await;
+                cache.save(self).await;
                 //println!("add_reverse_edge: Existing exiting...");
             }
         }

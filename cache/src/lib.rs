@@ -227,7 +227,7 @@ impl<K : Hash + Eq + Debug + Clone,V : Clone + Debug >  InnerCache<K,V>
     pub fn loading(&self, key: &K) -> bool {
         match self.loading.get(key) {
             None => false,
-            Some(_) => true,
+            Some(_) =>  true,
         }
     }
 
@@ -267,10 +267,10 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
 
     // unset loading
     pub async fn save(&mut self, key: &K) {
-        println!("CACHE: save  {:?}",key);
         let mut cache_guard = self.0.lock().await;
-        cache_guard.unset_loading(key); // now can be read by other 
-        //println!("CACHE: cache.unlock DONE");
+        if cache_guard.loading(key) {
+            cache_guard.unset_loading(key); // now can be read by other 
+        }
         cache_guard.unset_inuse(key);  // can now be persisted
     }
 
