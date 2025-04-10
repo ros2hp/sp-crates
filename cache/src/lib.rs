@@ -297,6 +297,10 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 let lru_ch = cache_guard.lru_ch.clone();
                 let persist_query_ch = cache_guard.persist_query_ch.clone();
                 let arc_value = V::new_with_key(key);
+                // ===============================================================
+                // serialise access to value - prevents concurrent operations on key
+                // ===============================================================                
+                let value_guard = arc_value.lock().await;
                 // =========================
                 // add to cache, set in-use 
                 // =========================
@@ -304,10 +308,6 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 cache_guard.set_inuse(key.clone());
                 let persisting = cache_guard.persisting(&key);
                 cache_guard.set_loading(key.clone());
-                // ===============================================================
-                // serialise access to value - prevents concurrent operations on key
-                // ===============================================================                
-                let value_guard = arc_value.lock().await;
                 // ===========
                 // LRU Attach
                 // ===========
@@ -318,6 +318,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 waits.record(event_stats::Event::ChanLRUAttachSend,Instant::now().duration_since(before)).await;    
                 // sync'd: wait for LRU operation to complete - just like using a mutex is synchronous with operation.
                 let _ = srv_resp_rx.recv().await;
+                waits.record(event_stats::Event::GetNotInCache,Instant::now().duration_since(start_time)).await; 
                 // ============================================================================================================
                 // release cache lock with value still locked - value now in cache, so next get on key will go to in-cache path
                 // ============================================================================================================
@@ -331,9 +332,6 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                     self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;
                     waits.record(event_stats::Event::GetPersistingCheckNotInCache,Instant::now().duration_since(before)).await;    
                 }
-
-                waits.record(event_stats::Event::GetNotInCache,Instant::now().duration_since(start_time)).await; 
-
                 return CacheValue::New(arc_value.clone());
             }
             
@@ -344,7 +342,6 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // and optimises cache concurrency by releasing lock asap
                 waits.record(event_stats::Event::GetNotInCacheGet,Instant::now().duration_since(before)).await; 
                 let arc_value=arc_value.clone();
-
                 let persist_query_ch = cache_guard.persist_query_ch.clone();
                 let lru_ch=cache_guard.lru_ch.clone();
                 //let waits = cache_guard.waits.clone();
@@ -358,6 +355,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // =============================================
                 // serialise processing on concurrent key-value
                 // =============================================
+                let value_guard = arc_value.lock().await;
                 before = Instant::now();  
                 waits.record(event_stats::Event::GetNotInCacheValueLock,Instant::now().duration_since(before)).await; 
                 // ======================
