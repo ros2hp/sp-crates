@@ -246,9 +246,9 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                             // ================================
                             drop(cache_guard);  
                             drop(evict_node_guard); // required by persist 
-                            // ============================================
-                            // notify persist service - don't wait for resp
-                            // ============================================
+                            // ===============================================================================
+                            // notify persist service - need to set persistence before proceeding 
+                            // ================================================================================
                             println!("{} LRU: attach evict - notify persist service to persist {:?}",task, evict_entry.key);
                             if let Err(err) = self
                                 .persist_submit_ch
@@ -430,7 +430,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
 
 pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker::Send + std::marker::Sync + 'static, V: std::marker::Send + std::marker::Sync + Clone + std::fmt::Debug + 'static>
 (        lru_capacity : usize
-        ,mut cache: Cache<K,V>
+        ,cache: Cache<K,V>
         //
         ,mut lru_rx : tokio::sync::mpsc::Receiver<(usize, K, Instant,tokio::sync::mpsc::Sender<bool>, LruAction)>
         ,mut lru_flush_rx : tokio::sync::mpsc::Receiver<tokio::sync::mpsc::Sender<()>>
@@ -442,7 +442,7 @@ pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug +
 ) -> tokio::task::JoinHandle<()>  {
     // also consider tokio::task::spawn_blocking() which will create a OS thread and allocate task to it.
     // 
-    let (lru_client_ch, lru_client_rx) = tokio::sync::mpsc::channel::<bool>(1);
+    //let (lru_client_ch, lru_client_rx) = tokio::sync::mpsc::channel::<bool>(1);
    
     let mut lru = lru::LRU::new(lru_capacity, persist_submit_ch.clone(), waits.clone());
     
@@ -458,11 +458,11 @@ pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug +
  
                         match action {
                             LruAction::Attach => {
-                                println!("{} LRU delay {:?} LRU: action Attach {:?}",Instant::now().duration_since(sent_time).as_nanos(),task, key);
+                                println!("{} LRU delay {:?} LRU: action Attach {:?}",task, Instant::now().duration_since(sent_time).as_nanos(), key);
                                 lru.attach( task, key, evict_tries, cache.clone()).await;
                             }
                             LruAction::Move_to_head => {
-                                println!("{} LRU delay {:?} LRU: action move_to_head {:?}", Instant::now().duration_since(sent_time).as_nanos(), task, key);
+                                println!("{} LRU delay {:?} LRU: action move_to_head {:?}",task, Instant::now().duration_since(sent_time).as_nanos(),  key);
                                 lru.move_to_head( task, key).await;
                             }
                         }
@@ -474,7 +474,8 @@ pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug +
 
                 Some(client_ch) = lru_flush_rx.recv() => {
                                
-                                println!("LRU service - flush lru ");
+
+                            println!("LRU service - flush lru ");
                                     let mut entry = lru.head;
                                     let mut lc = 0;
                                     let cache_guard = cache.0.lock().await;
@@ -489,6 +490,7 @@ pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug +
                                                                 println!("Error on persist_submit_ch channel [{}]",err);
                                                             }
                                             } 
+
                                             entry = entry_.lock().await.next.clone();      
                                     }
                                     //sleep(Duration::from_millis(2000)).await;

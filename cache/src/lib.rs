@@ -322,8 +322,10 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                     self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;
                     waits.record(event_stats::Event::GetPersistingCheckNotInCache,Instant::now().duration_since(before)).await;    
                 }
-
                 before = Instant::now();
+                // ==================================================================
+                // Send Attach to LRU - will set_persistence, set_inuse for evict key 
+                // ==================================================================
                 if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::Attach)).await {
                     panic!("Send on lru_attach_ch errored: {}", err);
                 }   
@@ -370,8 +372,11 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                     waits.record(event_stats::Event::GetPersistingCheckInCache,Instant::now().duration_since(before)).await;     
                 }
                 // check if node is loading from a previous get "not in" cache operation.
+                let mut l = 0;
                 while loading {
-                    println!("{} Cache: Get for existing... node loading {:?}",task, &key);
+                    if l == 0 {
+                        println!("{} Cache: node loading.. {:?}",task, &key);
+                    }
                     {
                         let mut cache_guard = self.0.lock().await; 
                         loading = cache_guard.loading(&key);
@@ -379,7 +384,12 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                     if loading {
                         sleep(Duration::from_millis(10)).await;
                     } 
+                    l += 1;
                 }
+                if l > 0 {
+                    println!("{} Cache: Node loaded - looped {}  {:?}",task, l, &key); 
+                }
+                //
                 before = Instant::now(); 
                 if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::Move_to_head)).await {
                     panic!("Send on lru_move_to_head_ch failed {}",err)
