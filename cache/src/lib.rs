@@ -1,4 +1,3 @@
-
 mod service;
 pub extern crate event_stats;         // makes crate public
 
@@ -217,17 +216,19 @@ impl<K : Hash + Eq + Debug + Clone,V : Clone + Debug >  InnerCache<K,V>
     }
 
     pub fn set_loading(&mut self, key: K) {
+        println!("Cache: set_loading {:?}",&key);
         self.loading.insert(key);
     }
 
     pub fn unset_loading(&mut self, key: &K) {
+        println!("Cache: unset_loading {:?}",key);
         self.loading.remove(key);
     }
 
     pub fn loading(&self, key: &K) -> bool {
         match self.loading.get(key) {
-            None => false,
-            Some(_) =>  true,
+            None => {println!("Cache: NOT loading...{:?}",key); false},
+            Some(_) => {println!("Cache: loading...{:?}",key); true},
         }
     }
 
@@ -267,10 +268,10 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
 
     // unset loading
     pub async fn release(&mut self, key: &K) {
+        println!("CACHE: save  {:?}",key);
         let mut cache_guard = self.0.lock().await;
-        if cache_guard.loading(key) {
-            cache_guard.unset_loading(key); // now can be read by other 
-        }
+        cache_guard.unset_loading(key); // now can be read by other 
+        //println!("CACHE: cache.unlock DONE");
         cache_guard.unset_inuse(key);  // can now be persisted
     }
 
@@ -297,10 +298,6 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 let lru_ch = cache_guard.lru_ch.clone();
                 let persist_query_ch = cache_guard.persist_query_ch.clone();
                 let arc_value = V::new_with_key(key);
-                // ===============================================================
-                // serialise access to value - prevents concurrent operations on key
-                // ===============================================================                
-                let value_guard = arc_value.lock().await;
                 // =========================
                 // add to cache, set in-use 
                 // =========================
@@ -308,17 +305,10 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 cache_guard.set_inuse(key.clone());
                 let persisting = cache_guard.persisting(&key);
                 cache_guard.set_loading(key.clone());
-                // ===========
-                // LRU Attach
-                // ===========
-                before = Instant::now();
-                if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::Attach)).await {
-                    panic!("Send on lru_attach_ch errored: {}", err);
-                }   
-                waits.record(event_stats::Event::ChanLRUAttachSend,Instant::now().duration_since(before)).await;    
-                // sync'd: wait for LRU operation to complete - just like using a mutex is synchronous with operation.
-                let _ = srv_resp_rx.recv().await;
-                waits.record(event_stats::Event::GetNotInCache,Instant::now().duration_since(start_time)).await; 
+                // ===============================================================
+                // serialise access to value - prevents concurrent operations on key
+                // ===============================================================                
+                let value_guard = arc_value.lock().await;
                 // ============================================================================================================
                 // release cache lock with value still locked - value now in cache, so next get on key will go to in-cache path
                 // ============================================================================================================
@@ -332,6 +322,17 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                     self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;
                     waits.record(event_stats::Event::GetPersistingCheckNotInCache,Instant::now().duration_since(before)).await;    
                 }
+
+                before = Instant::now();
+                if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::Attach)).await {
+                    panic!("Send on lru_attach_ch errored: {}", err);
+                }   
+                waits.record(event_stats::Event::ChanLRUAttachSend,Instant::now().duration_since(before)).await;    
+                // sync'd: wait for LRU operation to complete - just like using a mutex is synchronous with operation.
+                let _ = srv_resp_rx.recv().await;
+
+                waits.record(event_stats::Event::GetNotInCache,Instant::now().duration_since(start_time)).await; 
+
                 return CacheValue::New(arc_value.clone());
             }
             
@@ -342,13 +343,13 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // and optimises cache concurrency by releasing lock asap
                 waits.record(event_stats::Event::GetNotInCacheGet,Instant::now().duration_since(before)).await; 
                 let arc_value=arc_value.clone();
+
                 let persist_query_ch = cache_guard.persist_query_ch.clone();
                 let lru_ch=cache_guard.lru_ch.clone();
                 //let waits = cache_guard.waits.clone();
                 let persisting = cache_guard.persisting(&key);
                 let mut loading = cache_guard.loading(&key);
-                // prevent eviction
-                cache_guard.set_inuse(key.clone()); 
+                cache_guard.set_inuse(key.clone()); // prevents concurrent persist
                 // =========================
                 // release cache lock
                 // =========================
@@ -356,34 +357,9 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // =============================================
                 // serialise processing on concurrent key-value
                 // =============================================
-                let value_guard = arc_value.lock().await;
                 before = Instant::now();  
                 waits.record(event_stats::Event::GetNotInCacheValueLock,Instant::now().duration_since(before)).await; 
-                // ================================================================
-                // check if node is loading from a previous get "not in" operation.
-                // ================================================================
-                let mut n = 1;
-                while loading {
-                    if n == 1 {
-                        println!("{} Cache: node loading {:?}",task, &key);
-                    }
-                    sleep(Duration::from_millis(10)).await;
-                    let mut cache_guard = self.0.lock().await; 
-                    loading = cache_guard.loading(&key);
-                    n+=1;
-                }
-                if n > 1 {
-                    println!("{} Cache: node loaded..proceeding. Polls {}  {:?}",task, n, &key);
-                }
-                // ================
-                // LRU Move-to-Head
-                // ================
-                before = Instant::now(); 
-                if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::Move_to_head)).await {
-                    panic!("Send on lru_move_to_head_ch failed {}",err)
-                };
-                let _ = srv_resp_rx.recv().await;
-                waits.record(event_stats::Event::GetInCacheMoveToHeadResp,Instant::now().duration_since(start_time)).await; 
+   
                 // ======================
                 // IS NODE persisting 
                 // ======================
@@ -393,7 +369,24 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                     self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;    
                     waits.record(event_stats::Event::GetPersistingCheckInCache,Instant::now().duration_since(before)).await;     
                 }
-                
+                // check if node is loading from a previous get "not in" cache operation.
+                while loading {
+                    println!("{} Cache: Get for existing... node loading {:?}",task, &key);
+                    {
+                        let mut cache_guard = self.0.lock().await; 
+                        loading = cache_guard.loading(&key);
+                    }
+                    if loading {
+                        sleep(Duration::from_millis(10)).await;
+                    } 
+                }
+                before = Instant::now(); 
+                if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::Move_to_head)).await {
+                    panic!("Send on lru_move_to_head_ch failed {}",err)
+                };
+                let _ = srv_resp_rx.recv().await;
+                waits.record(event_stats::Event::GetInCacheMoveToHeadResp,Instant::now().duration_since(start_time)).await; 
+
                 waits.record(event_stats::Event::GetInCache,Instant::now().duration_since(start_time)).await; 
                 
                 return CacheValue::Existing(arc_value.clone());
@@ -432,14 +425,14 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
         waits.record(event_stats::Event::ChanPersistQueryResp,Instant::now().duration_since(before)).await;
             
         if persist_resp {
-            // ====================================
-            // wait for completed msg from Persist
-            // ====================================
-            println!("{} CACHE: wait_for_persist_to_complete entered...wait for io to complete...{:?}",task, key);
-            before =Instant::now();
-            persist_srv_resp_rx.recv().await;
-            waits.record(event_stats::Event::ChanPersistWait,Instant::now().duration_since(before)).await;
-        }
-        println!("{} CACHE: wait_for_persist_to_complete EXIT  {:?}",task, key);
+                    // ====================================
+                    // wait for completed msg from Persist
+                    // ====================================
+                    println!("{} CACHE: wait_for_persist_to_complete entered...wait for io to complete...{:?}",task, key);
+                    before =Instant::now();
+                    persist_srv_resp_rx.recv().await;
+                    waits.record(event_stats::Event::ChanPersistWait,Instant::now().duration_since(before)).await;
+                }
+        println!("{} CACHE: wait_for_persist_to_complete .EXIT  {:?}",task, key);
     }
 }
