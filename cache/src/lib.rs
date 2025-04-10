@@ -347,7 +347,8 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 //let waits = cache_guard.waits.clone();
                 let persisting = cache_guard.persisting(&key);
                 let mut loading = cache_guard.loading(&key);
-                cache_guard.set_inuse(key.clone()); // prevents concurrent persist
+                // prevent eviction
+                cache_guard.set_inuse(key.clone()); 
                 // =========================
                 // release cache lock
                 // =========================
@@ -358,15 +359,6 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 let value_guard = arc_value.lock().await;
                 before = Instant::now();  
                 waits.record(event_stats::Event::GetNotInCacheValueLock,Instant::now().duration_since(before)).await; 
-                // ======================
-                // IS NODE persisting 
-                // ======================
-                if persisting {
-                    before = Instant::now(); 
-                    //println!("{} CACHE key: in CACHE check if still persisting ....{:?}", task,key);
-                    self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;    
-                    waits.record(event_stats::Event::GetPersistingCheckInCache,Instant::now().duration_since(before)).await;     
-                }
                 // ================================================================
                 // check if node is loading from a previous get "not in" operation.
                 // ================================================================
@@ -392,7 +384,16 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 };
                 let _ = srv_resp_rx.recv().await;
                 waits.record(event_stats::Event::GetInCacheMoveToHeadResp,Instant::now().duration_since(start_time)).await; 
-
+                // ======================
+                // IS NODE persisting 
+                // ======================
+                if persisting {
+                    before = Instant::now(); 
+                    //println!("{} CACHE key: in CACHE check if still persisting ....{:?}", task,key);
+                    self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;    
+                    waits.record(event_stats::Event::GetPersistingCheckInCache,Instant::now().duration_since(before)).await;     
+                }
+                
                 waits.record(event_stats::Event::GetInCache,Instant::now().duration_since(start_time)).await; 
                 
                 return CacheValue::Existing(arc_value.clone());
