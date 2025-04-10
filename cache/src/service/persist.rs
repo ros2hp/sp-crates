@@ -154,14 +154,12 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                     tasks-=1;
 
                     println!("{} PERSIST : completed msg:  key {:?} tasks {}, pending_q {}", task, persist_key, tasks,pending_q.0.len());
-
-                    //println!("{} PERSIST : completed msg:  key {:?}  tasks {}", task, persist_key, tasks);
                     persisting_lookup.0.remove(&persist_key);
                     cache.0.lock().await.unset_persisting(&persist_key);
 
                     // send ack to waiting client 
                     if let Some(client_chs) = query_client.0.get_mut(&persist_key) {
-                        // send ack of completed persistion to waiting client
+                        // send ack of completed persist to waiting client
                         loop {
                             if let Some(v) = client_chs.pop_front() {
                                 if let Err(err) = v.send(true).await {
@@ -210,14 +208,25 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
 
                 Some(query_msg) = client_query_rx.recv() => {
 
-                    // ACK to client whether node is marked evicted
-                    if let Some(_) = persisting_lookup.0.get(&query_msg.0) {
+                    // timing issues between main and persist tasks requires that 
+                    // we check if node is still persisting which is set by LRU service 
+                    // and is the source of truth for a persisting node.
+                    let still_persisting = cache.0.lock().await.persisting(&query_msg.0);
+
+                    if !still_persisting {
+                        // send ACK (false) to client 
+                        if let Err(err) = query_msg.1.send(false).await {
+                            panic!("Error in sending query_msg [{}]",err)
+                        };   
+
+                    } else {
+                        // ACK to client whether node is marked evicted
                         // register for notification of persist completion.
                         query_client.0
-                        .entry(query_msg.0.clone())
-                        .and_modify(|e| e.push_back(query_msg.1.clone()))
-                        .or_insert_with(||{ let mut d = VecDeque::new(); d.push_back(query_msg.1.clone()); d});
-                        
+                            .entry(query_msg.0.clone())
+                            .and_modify(|e| e.push_back(query_msg.1.clone()))
+                            .or_insert_with(||{ let mut d = VecDeque::new(); d.push_back(query_msg.1.clone()); d});
+                            
                         if let Some(client_chs) = query_client.0.get(&query_msg.0) {
                             println!("{} PERSIST : client query vecdeque len {} {:?}",query_msg.2, client_chs.len(), query_msg.0);  
                         }
@@ -225,17 +234,9 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                         println!("{} PERSIST : send ACK (true) to client {:?}",query_msg.2 , query_msg.0);
                         if let Err(err) = query_msg.1.send(true).await {
                             panic!("Error in sending query_msg [{}]",err)
-                        };
-                        
-                    } else {
-                        
-                        // send ACK (false) to client 
-                        if let Err(err) = query_msg.1.send(false).await {
-                            panic!("Error in sending query_msg [{}]",err)
-                        };                
+                        };     
+                        println!("{} PERSIST :  client_query exit {:?}", query_msg.2 , query_msg.0);
                     }
-
-                    println!("{} PERSIST :  client_query exit {:?}", query_msg.2 , query_msg.0);
                 },
 
                 _ = shutdown_rx.recv() => {

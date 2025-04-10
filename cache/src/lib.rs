@@ -324,6 +324,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 }
                 before = Instant::now();
                 // ==================================================================
+
                 // Send Attach to LRU - will set_persistence, set_inuse for evict key 
                 // ==================================================================
                 if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::Attach)).await {
@@ -416,7 +417,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
         // or ack that it completed already.
         let mut before:Instant =Instant::now();
         if let Err(e) = persist_query_ch
-                                .send(QueryMsg::new(key.clone(), persist_client_send_ch.clone(),task))
+                                .send(QueryMsg::new(key.clone(), persist_client_send_ch.clone(), task))
                                 .await
                                 {
                                     panic!("evict channel comm failed = {}", e);
