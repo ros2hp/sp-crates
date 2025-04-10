@@ -268,7 +268,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
 
     // unset loading
     pub async fn release(&mut self, key: &K) {
-        println!("CACHE: save  {:?}",key);
+        println!("CACHE: release  {:?}",key);
         let mut cache_guard = self.0.lock().await;
         cache_guard.unset_loading(key); // now can be read by other 
         //println!("CACHE: cache.unlock DONE");
@@ -305,14 +305,14 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 cache_guard.set_inuse(key.clone());
                 let persisting = cache_guard.persisting(&key);
                 cache_guard.set_loading(key.clone());
-                // ===============================================================
-                // serialise access to value - prevents concurrent operations on key
-                // ===============================================================                
-                let value_guard = arc_value.lock().await;
                 // ============================================================================================================
                 // release cache lock with value still locked - value now in cache, so next get on key will go to in-cache path
                 // ============================================================================================================
                 drop(cache_guard);
+                // ===============================================================
+                // serialise access to value - prevents concurrent operations on key
+                // ===============================================================                
+                // let value_guard = arc_value.lock().await;
                 // =======================
                 // IS NODE BEING PERSISTED 
                 // =======================
@@ -324,7 +324,6 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 }
                 before = Instant::now();
                 // ==================================================================
-
                 // Send Attach to LRU - will set_persistence, set_inuse for evict key 
                 // ==================================================================
                 if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::Attach)).await {
@@ -362,7 +361,10 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // =============================================
                 before = Instant::now();  
                 waits.record(event_stats::Event::GetNotInCacheValueLock,Instant::now().duration_since(before)).await; 
-   
+                // ===============================================================
+                // serialise access to value - prevents concurrent operations on key
+                // ===============================================================  
+                //let value_guard = arc_value.lock().await;
                 // ======================
                 // IS NODE persisting 
                 // ======================

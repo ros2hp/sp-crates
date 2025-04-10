@@ -215,6 +215,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
 
                     if !still_persisting {
                         // send ACK (false) to client 
+                        println!("{} PERSIST : not still_persisting - send false {:?}",query_msg.2, query_msg.0);
                         if let Err(err) = query_msg.1.send(false).await {
                             panic!("Error in sending query_msg [{}]",err)
                         };   
