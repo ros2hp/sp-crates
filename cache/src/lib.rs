@@ -392,10 +392,10 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                     l += 1;
                 }
                 if l > 0 {
-                    println!("{} Cache: Node loaded - looped {}  {:?}",task, l, &key); 
+                    //println!("{} Cache: Node loaded - looped {}  {:?}",task, l, &key); 
+                    waits.record(event_stats::Event::GetInCacheLoading,Instant::now().duration_since(start_time)).await; 
                 }
-                waits.record(event_stats::Event::GetInCacheLoading,Instant::now().duration_since(start_time)).await; 
-                //
+              //
                 before = Instant::now(); 
                 if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::Move_to_head)).await {
                     panic!("Send on lru_move_to_head_ch failed {}",err)
