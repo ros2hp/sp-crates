@@ -100,6 +100,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
  
                         // check if already submitted - 
                         if persisting_lookup.0.contains_key(&key) {
+                            println!("{} PANIC: Persist service: submitted key again. Timing Issue: persist yet to finish from previous submit {:?}",task, key);
                             panic!("{} Persist service: submitted key again, persist yet to finish from previous submit {:?}",task, key);
                         };
  
@@ -232,11 +233,11 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                             println!("{} PERSIST : client query vecdeque len {} {:?}",query_msg.2, client_chs.len(), query_msg.0);  
                         }
                         // send ACK (true) to client 
-                        println!("{} PERSIST : send ACK (true) to client {:?}",query_msg.2 , query_msg.0);
+                        //println!("{} PERSIST : send ACK (true) to client {:?}",query_msg.2 , query_msg.0);
                         if let Err(err) = query_msg.1.send(true).await {
                             panic!("Error in sending query_msg [{}]",err)
                         };     
-                        println!("{} PERSIST :  client_query exit {:?}", query_msg.2 , query_msg.0);
+                        //println!("{} PERSIST :  client_query exit {:?}", query_msg.2 , query_msg.0);
                     }
                 },
 

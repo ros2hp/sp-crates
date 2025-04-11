@@ -357,6 +357,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                     let hd: K = v.lock().await.key.clone();
                     if hd == key {
                         // k already at head
+                        println!("{} LRU move_to_head {:?} at head already", task, key);
                         return
                     }    
                 }

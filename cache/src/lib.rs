@@ -216,19 +216,19 @@ impl<K : Hash + Eq + Debug + Clone,V : Clone + Debug >  InnerCache<K,V>
     }
 
     pub fn set_loading(&mut self, key: K) {
-        println!("Cache: set_loading {:?}",&key);
+        //println!("Cache: set_loading {:?}",&key);
         self.loading.insert(key);
     }
 
     pub fn unset_loading(&mut self, key: &K) {
-        println!("Cache: unset_loading {:?}",key);
+        //println!("Cache: unset_loading {:?}",key);
         self.loading.remove(key);
     }
 
     pub fn loading(&self, key: &K) -> bool {
         match self.loading.get(key) {
-            None => {println!("Cache: NOT loading...{:?}",key); false},
-            Some(_) => {println!("Cache: loading...{:?}",key); true},
+            None => false,
+            Some(_) => true,
         }
     }
 
@@ -271,7 +271,6 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
         println!("CACHE: release  {:?}",key);
         let mut cache_guard = self.0.lock().await;
         cache_guard.unset_loading(key); // now can be read by other 
-        //println!("CACHE: cache.unlock DONE");
         cache_guard.unset_inuse(key);  // can now be persisted
     }
 
@@ -293,7 +292,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
             
             None => {
 
-                //println!("{} CACHE: get -  Not Cached: add to cache {:?}", task, key);
+                println!("{} CACHE: get -  Not Cached: add to cache {:?}", task, key);
                 waits.record(event_stats::Event::GetInCacheGet,Instant::now().duration_since(before)).await; 
                 let lru_ch = cache_guard.lru_ch.clone();
                 let persist_query_ch = cache_guard.persist_query_ch.clone();
@@ -310,7 +309,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // ============================================================================================================
                 drop(cache_guard);
                 // ===============================================================
-                // serialise access to value - prevents concurrent operations on key
+                // serialise access to value - prevents concurrent operations on key - ** not necessary - app will lock **
                 // ===============================================================                
                 // let value_guard = arc_value.lock().await;
                 // =======================
@@ -329,7 +328,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::Attach)).await {
                     panic!("Send on lru_attach_ch errored: {}", err);
                 }   
-                waits.record(event_stats::Event::ChanLRUAttachSend,Instant::now().duration_since(before)).await;    
+                // waits.record(event_stats::Event::ChanLRUAttachSend,Instant::now().duration_since(before)).await;    
                 // sync'd: wait for LRU operation to complete - just like using a mutex is synchronous with operation.
                 let _ = srv_resp_rx.recv().await;
 
@@ -340,7 +339,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
             
             Some(arc_value) => {
 
-                //println!("{} CACHE: get - Cached:  {:?}", task, key);
+                println!("{} CACHE: get - Cached:  {:?}", task, key);
                 // acquire lock on value and release cache lock - this prevents concurrent updates to value 
                 // and optimises cache concurrency by releasing lock asap
                 waits.record(event_stats::Event::GetNotInCacheGet,Instant::now().duration_since(before)).await; 
