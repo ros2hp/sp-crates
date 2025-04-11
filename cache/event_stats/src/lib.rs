@@ -35,6 +35,7 @@ pub enum Event {
     GetCacheAcquireLock,
     GetNotInCacheValueLock,
     GetInCacheMoveToHeadResp,
+    GetInCacheLoading,
     // Dynamodb
     GetItem,
     PersistEmbedded,

@@ -373,7 +373,10 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                     self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;    
                     waits.record(event_stats::Event::GetPersistingCheckInCache,Instant::now().duration_since(before)).await;     
                 }
-                // check if node is loading from a previous get "not in" cache operation.
+                // ======================
+                // IS NODE loading 
+                // ======================
+                before = Instant::now(); 
                 let mut l = 0;
                 while loading {
                     if l == 0 {
@@ -391,6 +394,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 if l > 0 {
                     println!("{} Cache: Node loaded - looped {}  {:?}",task, l, &key); 
                 }
+                waits.record(event_stats::Event::GetInCacheLoading,Instant::now().duration_since(start_time)).await; 
                 //
                 before = Instant::now(); 
                 if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::Move_to_head)).await {
