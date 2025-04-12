@@ -211,7 +211,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
 
                     // timing issues between main and persist tasks requires that 
                     // we check if node is still persisting which is set by LRU service 
-                    // and is the source of truth for a persisting node.
+                    // and is the source of truth.
                     let still_persisting = cache.0.lock().await.persisting(&query_msg.0);
 
                     if !still_persisting {

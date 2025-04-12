@@ -304,14 +304,14 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 cache_guard.set_inuse(key.clone());
                 let persisting = cache_guard.persisting(&key);
                 cache_guard.set_loading(key.clone());
+                // ===============================================================
+                // serialise access to value - prevents concurrent operations on key - ** not necessary - app will lock **
+                // ===============================================================                
+                //let value_guard = arc_value.lock().await;
                 // ============================================================================================================
                 // release cache lock with value still locked - value now in cache, so next get on key will go to in-cache path
                 // ============================================================================================================
                 drop(cache_guard);
-                // ===============================================================
-                // serialise access to value - prevents concurrent operations on key - ** not necessary - app will lock **
-                // ===============================================================                
-                // let value_guard = arc_value.lock().await;
                 // =======================
                 // IS NODE BEING PERSISTED 
                 // =======================

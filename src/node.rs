@@ -446,14 +446,6 @@ impl Persistence<RKey, Dynamo> for RNode {
 
             handle_result(&rkey, result);
         }
-
-        // send task completed msg to persist service
-        // if let Err(err) = persist_completed_send_ch.send((rkey.clone(), task)).await {
-        //     println!(
-        //         "Sending completed persist msg to waiting client failed: {}",
-        //         err
-        //     );
-        // }
         println!("{} *PERSIST  Exit    {:?}", task, rkey);
         ()
     }
