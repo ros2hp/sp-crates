@@ -1,7 +1,8 @@
-use super::*;
-
-use crate::cache::{Cache, CacheValue};
+use crate::lrucache::{Cache, CacheValue};
 use crate::node::RNode;
+use crate::DynamoClient;
+use crate::Uuid;
+
 use std::fmt::Debug;
 
 // Reverse_SK is the SK value for the Child of form R#<parent-node-type>#:<parent-edge-attribute-sn>
@@ -20,11 +21,11 @@ impl RKey {
         task: usize,
         dyn_client: &DynamoClient,
         table_name: &str, //
-        cache: &mut Cache<RKey, RNode>, //
+        cache: &Cache<RKey, RNode>, 
         target: &Uuid,
         id: usize,
     ) {
-        
+
         match cache.get(&self, task).await {
             
             CacheValue::New(node) => {

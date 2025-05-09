@@ -1,7 +1,6 @@
 use crate::Cache;
 use crate::Persistence;
 
-//extern crate event_stats;
 use event_stats::Waits;
 
 use crate::QueryMsg;
@@ -10,7 +9,6 @@ use std::collections::{HashMap,  VecDeque};
 use std::sync::Arc;
 
 use tokio::task;
-use tokio::time;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
@@ -77,15 +75,14 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
     let mut pending_q: PendingQ<K> = PendingQ::new();
     let mut query_client: QueryClient<K> = QueryClient::new();
     let mut tasks = 0;
-    let mut shutdown = false;
 
-    // persist channel used to acknowledge to a waiting client that the associated node has completed persistion.
+    // persist completed channel - persisting task sends message to Persist Service when it completes 
     let (persist_completed_send_ch, mut persist_completed_rx) =
         tokio::sync::mpsc::channel::<(K,usize,tokio::time::Instant)>(persist_tasks);
 
     let waits = waits_.clone();
 
-    // persist service only handles
+    // start Tokio Task that is the Persist service
     let persist_server = tokio::spawn(async move {
 
         loop {
@@ -93,7 +90,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
             tokio::select! { 
                 biased;         // removes random number generation - normal processing will determine order so select! can follow it.
                 // note: recv() is cancellable, meaning select! can cancel a recv() without loosing data in the channel.
-                // select! will be forced to cancel recv() if another branch event happens e.g. recv() on shutdown_rxannel.
+                // select! will be forced to cancel recv() if another branch event happens e.g. recv() on shutdown_rx channel.
                 Some((task, key, arc_node, sent_time)) = submit_rx.recv() => {
 
                         waits.record(event_stats::Event::ChanPersistSubmitRcv,Instant::now().duration_since(sent_time)).await;
@@ -114,9 +111,9 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                             pending_q.0.push_front(key.clone());                         
     
                         } else {
-                            // ==============================================
-                            // lock arc node - to access type persist method
-                            // ==============================================
+		                    // =================================================
+                            // lock arc value to access type parameter V [RNode]
+                            // =================================================
                             let node_guard_=arc_node.lock().await;
 
                             let mut node_guard=node_guard_.clone();
@@ -134,7 +131,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                                     ,db
                                     ,waits
                                 ).await;
-                                // send task completed msg to self
+                                // send persist completed msg 
                                 let before = Instant::now();
                                 if let Err(err) = persist_completed_send_ch_.send((key.clone(), task, before)).await {
                                             println!(
@@ -174,13 +171,13 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                         query_client.0.remove(&persist_key);
                     }
                     // // process next node in persist Pending Queue
-                    if let Some(queued_Key) = pending_q.0.pop_back() {
-                        //println!("{} PERSIST : persist next entry in pending_q.... {:?}", task, queued_Key);
+                    if let Some(queued_key) = pending_q.0.pop_back() {
+                        //println!("{} PERSIST : persist next entry in pending_q.... {:?}", task, queued_key);
                         // spawn async task to persist node
                         let persist_completed_send_ch_=persist_completed_send_ch.clone();
 
-                        let Some(arc_node_) = persisting_lookup.0.get(&queued_Key) else {panic!("Persist service: expected arc_node in Lookup {:?}",queued_Key)};
-                        let arc_node=arc_node_.clone();
+                        let Some(arc_node_) = persisting_lookup.0.get(&queued_key) else {panic!("Persist service: expected arc_node in Lookup {:?}",queued_key)};
+                        let _arc_node=arc_node_.clone();
                         let db=db.clone();
                         let waits=waits.clone();
                         let mut node_guard = arc_node_.lock().await.clone();
@@ -196,7 +193,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                             ).await;
                             // send task completed msg to self
                             let before=Instant::now();
-                            if let Err(err) = persist_completed_send_ch_.send((queued_Key.clone(), task, before)).await {
+                            if let Err(err) = persist_completed_send_ch_.send((queued_key.clone(), task, before)).await {
                                             println!(
                                                 "Sending completed persist msg to waiting client failed: {}",
                                                 err
@@ -242,14 +239,12 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                 },
 
                 _ = shutdown_rx.recv() => {
-                        shutdown=true;
                         println!("PERSIST shutdown:  Waiting for remaining persist tasks [{}] pending_q {} to complete...",tasks as usize, pending_q.0.len());
                         while tasks > 0 || pending_q.0.len() > 0 {
                             println!("  PERSIST : shutdown wait for completed msg:  tasks {}, pending_q {}", tasks,pending_q.0.len());
                             if tasks > 0 {
                                 let Some(persist_key) = persist_completed_rx.recv().await else {panic!("Inconsistency; expected task complete msg got None...")};
                                 tasks-=1;
-                                let task = persist_key.1;
                                 // send to client if one is waiting on query channel. Does not block as buffer size is 1.
                                 if let Some(client_chs) = query_client.0.get(&persist_key.0) {
                                     // send ack of completed persistion to waiting client
@@ -262,10 +257,10 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                                     query_client.0.remove(&persist_key.0);
                                 }
                             }
-                            if let Some(queued_Key) = pending_q.0.pop_back() {
+                            if let Some(queued_key) = pending_q.0.pop_back() {
   
                                 let persist_completed_send_ch_=persist_completed_send_ch.clone();
-                                let Some(arc_node_) = persisting_lookup.0.get(&queued_Key) else {panic!("Persist service: expected arc_node in Lookup")};
+                                let Some(arc_node_) = persisting_lookup.0.get(&queued_key) else {panic!("Persist service: expected arc_node in Lookup")};
                                 let waits=waits.clone();
                                 let mut node_guard= arc_node_.lock().await.clone();
                                 let db=db.clone();
@@ -282,7 +277,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + 'static,
                                     ).await;
                                     // send task completed msg to self
                                     let before = Instant::now();
-                                    if let Err(err) = persist_completed_send_ch_.send((queued_Key.clone(), 0, before)).await {
+                                    if let Err(err) = persist_completed_send_ch_.send((queued_key.clone(), 0, before)).await {
                                         println!(
                                             "Sending completed persist msg to waiting client failed: {}",
                                             err

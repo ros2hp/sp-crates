@@ -4,17 +4,17 @@ mod rkey;
 mod service;
 mod types;
 
-extern crate cache;
-use cache::event_stats; //{Waits, Event};
+extern crate lrucache;
+use lrucache::event_stats; //{Waits, Event};
 
 use std::collections::HashMap;
 use std::env;
 use std::mem;
 use std::string::String;
 //use std::sync::LazyLock;
-use std::sync::Arc;
 
-use cache::Cache;
+
+use lrucache::Cache;
 use node::RNode;
 
 use rkey::RKey;
@@ -24,9 +24,6 @@ use aws_sdk_dynamodb::types::builders::PutRequestBuilder;
 use aws_sdk_dynamodb::types::AttributeValue;
 use aws_sdk_dynamodb::types::WriteRequest;
 use aws_sdk_dynamodb::Client as DynamoClient;
-//use aws_sdk_dynamodb::types::ReturnValue;
-//use aws_sdk_dynamodb::operation::batch_write_item::BatchWriteItemError;
-//use aws_smithy_runtime_api::client::result::SdkError;
 
 use uuid::Uuid;
 
@@ -102,17 +99,17 @@ type Puid = Uuid;
 
 struct ParentEdge {
     //
-    nd: Vec<AttributeValue>, //uuid.UID // list of node UIDs, overflow block UIDs, oveflow index UIDs
-    xf: Vec<AttributeValue>, // used in uid-predicate 1 : c-UID, 2 : c-UID is soft deleted, 3 : ovefflow UID, 4 : overflow block full
-    id: Vec<u32>,            // most recent batch in overflow
-    //
-    ty: String,         // node type m|P
-    p: String,          // edge predicate (long name) e.g. m|actor.performance - indexed in P_N
-    cnt: usize,         // number of edges < 20 (MaxChildEdges)
-    rrobin_alloc: bool, // round robin ovb allocation applies (initially false)
-    eattr_nm: String,   // edge attribute name (derived from sortk)
-    eattr_sn: String,   // edge attribute short name (derived from sortk)
-                        //
+    //nd: Vec<AttributeValue>, //uuid.UID // list of node UIDs, overflow block UIDs, oveflow index UIDs
+    // xf: Vec<AttributeValue>, // used in uid-predicate 1 : c-UID, 2 : c-UID is soft deleted, 3 : ovefflow UID, 4 : overflow block full
+    // id: Vec<u32>,            // most recent batch in overflow
+    // //
+    // ty: String,         // node type m|P
+    // p: String,          // edge predicate (long name) e.g. m|actor.performance - indexed in P_N
+    // cnt: usize,         // number of edges < 20 (MaxChildEdges)
+    // rrobin_alloc: bool, // round robin ovb allocation applies (initially false)
+    // eattr_nm: String,   // edge attribute name (derived from sortk)
+    // eattr_sn: String,   // edge attribute short name (derived from sortk)
+    //                     //
                         // ovb_idx: usize, // last ovb populated
                         // ovbs: Vec<Vec<OvBatch>>, //  each ovb is made up of batches. each ovb simply has a different pk - a batch shares the same pk.
                         //                          //
@@ -243,7 +240,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     // =====================
     // setup Stats recorder
     // =====================
-    let (stats_ch, mut stats_rx) =
+    let (stats_ch, stats_rx) =
         tokio::sync::mpsc::channel::<(event_stats::Event, Duration, Duration)>(max_sp_tasks * 10);
     let waits = event_stats::Waits::new(stats_ch.clone());
     // =====================
@@ -268,11 +265,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     let stats_service = event_stats::start_event_service(stats_rx, stats_shutdown_ch);
 
     // ===========================================
-    // 3. allocate cache - with database config
+    // 3. allocate queued_key - with database config
     // ===========================================
     let db: Dynamo = Dynamo::new(dynamo_client.clone(), table_name.to_string());
     let Ok(evict_tries_) = evict_tries.parse() else {  panic!("evict_tries cannot be parsed to usize")};
-    let reverse_edge_cache = Cache::<RKey, RNode>::new(max_sp_tasks, waits.clone(), evict_tries_, db, lru_capacity, persist_tasks);
+    let reverse_edge_cache = Cache::<RKey, RNode>::new(max_sp_tasks, waits.clone(), evict_tries_, db, lru_capacity, persist_tasks).await;
 
     // ================================
     // 5. Setup a MySQL connection pool
@@ -349,7 +346,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
     // ====================================
     // 8. Setup retry failed writes channel
     // ====================================
-    let (retry_send_ch, retry_rx) =
+    let (retry_send_ch, _retry_rx) =
         tokio::sync::mpsc::channel::<Vec<aws_sdk_dynamodb::types::WriteRequest>>(max_sp_tasks);
     // ===============================================================================
     // 9. process each parent_node and its associated edges (child nodes) in parallel
@@ -675,7 +672,7 @@ async fn persist(
     task: usize,
     dyn_client: &DynamoClient,
     table_name: &str, //
-    mut cache: Cache<RKey, RNode>, //
+    cache: Cache<RKey, RNode>, //
     mut bat_w_req: Vec<WriteRequest>,
     add_rvs_edge: bool, //
     target_uid: Uuid,
@@ -683,7 +680,7 @@ async fn persist(
     retry_ch: tokio::sync::mpsc::Sender<Vec<aws_sdk_dynamodb::types::WriteRequest>>,
     ovb_pk: HashMap<String, Vec<Uuid>>,
     items: HashMap<SortK, Operation>, //
-    waits: event_stats::Waits,
+    _waits: event_stats::Waits,
 ) {
     // create channels to communicate (to and from) lru eviction service
     // evict_resp_ch: sender - passed to eviction service so it can send its response back to this routine
@@ -709,63 +706,69 @@ async fn persist(
                     },
                 };
 
-                let mut children: Vec<Uuid> = vec![];
-
-                match e.entry.unwrap() {
+                let children = match e.entry.unwrap() {
                     LS => {
                         if e.ls.len() <= EMBEDDED_CHILD_NODES {
-                            children = mem::take(&mut e.cuids);
+                            let children = mem::take(&mut e.cuids);
                             let embedded: Vec<_> = std::mem::take(&mut e.ls);
                             put = put.item(types::LS, AttributeValue::L(embedded));
                             finished = true;
+                            children
                         } else {
-                            children = e.cuids.split_off(EMBEDDED_CHILD_NODES);
+                            let mut children = e.cuids.split_off(EMBEDDED_CHILD_NODES);
                             std::mem::swap(&mut children, &mut e.cuids);
                             let mut embedded = e.ls.split_off(EMBEDDED_CHILD_NODES);
                             std::mem::swap(&mut embedded, &mut e.ls);
                             put = put.item(types::LS, AttributeValue::L(embedded));
+                            children
                         }
                     }
                     LN => {
                         if e.ln.len() <= EMBEDDED_CHILD_NODES {
-                            children = mem::take(&mut e.cuids);
+                            let children = mem::take(&mut e.cuids);
                             let embedded: Vec<_> = std::mem::take(&mut e.ln);
                             put = put.item(types::LN, AttributeValue::L(embedded));
                             finished = true;
+                            children
                         } else {
-                            children = e.cuids.split_off(EMBEDDED_CHILD_NODES);
+                            let mut children = e.cuids.split_off(EMBEDDED_CHILD_NODES);
                             std::mem::swap(&mut children, &mut e.cuids);
                             let mut embedded = e.ln.split_off(EMBEDDED_CHILD_NODES);
                             std::mem::swap(&mut embedded, &mut e.ln);
                             put = put.item(types::LN, AttributeValue::L(embedded));
+                            children
                         }
                     }
                     LBL => {
                         if e.lbl.len() <= EMBEDDED_CHILD_NODES {
-                            children = mem::take(&mut e.cuids);
+                            let children = mem::take(&mut e.cuids);
                             let embedded: Vec<_> = std::mem::take(&mut e.lbl);
                             put = put.item(types::LBL, AttributeValue::L(embedded));
                             finished = true;
+                            children
                         } else {
-                            children = e.cuids.split_off(EMBEDDED_CHILD_NODES);
+                            let mut children = e.cuids.split_off(EMBEDDED_CHILD_NODES);
                             std::mem::swap(&mut children, &mut e.cuids);
                             let mut embedded = e.lbl.split_off(EMBEDDED_CHILD_NODES);
                             std::mem::swap(&mut embedded, &mut e.lbl);
                             put = put.item(types::LBL, AttributeValue::L(embedded));
+                            children
                         }
                     }
                     LB => {
                         if e.lb.len() <= EMBEDDED_CHILD_NODES {
-                            children = mem::take(&mut e.cuids);
+                            let children = mem::take(&mut e.cuids);
                             let embedded: Vec<_> = std::mem::take(&mut e.lb);
                             put = put.item(types::LB, AttributeValue::L(embedded));
                             finished = true;
+                            children
                         } else {
-                            children = e.cuids.split_off(EMBEDDED_CHILD_NODES);
+                            let mut children = e.cuids.split_off(EMBEDDED_CHILD_NODES);
                             std::mem::swap(&mut children, &mut e.cuids);
                             let mut embedded = e.lbl.split_off(EMBEDDED_CHILD_NODES);
                             std::mem::swap(&mut embedded, &mut e.lbl);
                             put = put.item(types::LB, AttributeValue::L(embedded));
+                            children
                         }
                     }
                     _ => {
@@ -783,7 +786,7 @@ async fn persist(
                             task,
                             dyn_client,
                             table_name, //
-                            &mut cache.clone(), //
+                            &cache, 
                             &target_uid,
                             id,
                         )
@@ -799,7 +802,6 @@ async fn persist(
                 // add batches across ovbs until max reached
                 // =========================================
                 let mut bid: usize = 0;
-                let mut children: Vec<Uuid> = vec![];
 
                 for ovb in ovb_pk.get(&e.psk).unwrap() {
                     bid = 0;
@@ -815,10 +817,10 @@ async fn persist(
                             .item(types::PK, AttributeValue::B(Blob::new(ovb.clone())))
                             .item(types::SK, AttributeValue::S(sk_w_bid));
 
-                        match e.entry.unwrap() {
+                        let children = match e.entry.unwrap() {
                             LS => {
                                 if e.ls.len() <= OV_MAX_BATCH_SIZE {
-                                    children = mem::take(&mut e.cuids);
+                                    let children = mem::take(&mut e.cuids);
                                     let batch: Vec<_> = std::mem::take(&mut e.ls);
                                     put = put.item(types::LS, AttributeValue::L(batch));
                                     finished = true;
@@ -826,8 +828,9 @@ async fn persist(
                                     // let batch: Vec<_> = e.ls.drain(..e.ls.len()).collect();
                                     // put = put.item(types::LS, AttributeValue::L(batch));
                                     // finished = true;
+                                    children
                                 } else {
-                                    children = e.cuids.split_off(OV_MAX_BATCH_SIZE);
+                                    let mut children = e.cuids.split_off(OV_MAX_BATCH_SIZE);
                                     std::mem::swap(&mut children, &mut e.cuids);
                                     let mut batch = e.ls.split_off(OV_MAX_BATCH_SIZE);
                                     std::mem::swap(&mut batch, &mut e.ls);
@@ -835,57 +838,64 @@ async fn persist(
                                     // children = e.cuids.drain(..OV_MAX_BATCH_SIZE).collect();
                                     // let batch: Vec<_> = e.ls.drain(..OV_MAX_BATCH_SIZE).collect();
                                     // put = put.item(types::LS, AttributeValue::L(batch));
+                                    children
                                 }
                             }
 
                             LN => {
                                 if e.ln.len() <= OV_MAX_BATCH_SIZE {
-                                    children = mem::take(&mut e.cuids);
+                                    let children = mem::take(&mut e.cuids);
                                     let batch: Vec<_> = std::mem::take(&mut e.ln);
                                     put = put.item(types::LN, AttributeValue::L(batch));
                                     finished = true;
+                                    children
                                 } else {
-                                    children = e.cuids.split_off(OV_MAX_BATCH_SIZE);
+                                    let mut children = e.cuids.split_off(OV_MAX_BATCH_SIZE);
                                     std::mem::swap(&mut children, &mut e.cuids);
                                     let mut batch = e.ln.split_off(OV_MAX_BATCH_SIZE);
                                     std::mem::swap(&mut batch, &mut e.ln);
                                     put = put.item(types::LS, AttributeValue::L(batch));
+                                    children
                                 }
                             }
 
                             LBL => {
                                 if e.lbl.len() <= OV_MAX_BATCH_SIZE {
-                                    children = mem::take(&mut e.cuids);
+                                    let children = mem::take(&mut e.cuids);
                                     let batch: Vec<_> = std::mem::take(&mut e.lbl);
                                     put = put.item(types::LBL, AttributeValue::L(batch));
                                     finished = true;
+                                    children
                                 } else {
-                                    children = e.cuids.split_off(OV_MAX_BATCH_SIZE);
+                                    let mut children = e.cuids.split_off(OV_MAX_BATCH_SIZE);
                                     std::mem::swap(&mut children, &mut e.cuids);
                                     let mut batch = e.lbl.split_off(OV_MAX_BATCH_SIZE);
                                     std::mem::swap(&mut batch, &mut e.lbl);
                                     put = put.item(types::LS, AttributeValue::L(batch));
+                                    children
                                 }
                             }
 
                             LB => {
                                 if e.lb.len() <= OV_MAX_BATCH_SIZE {
-                                    children = mem::take(&mut e.cuids);
+                                    let children = mem::take(&mut e.cuids);
                                     let batch: Vec<_> = std::mem::take(&mut e.lb);
                                     put = put.item(types::LB, AttributeValue::L(batch));
                                     finished = true;
+                                    children
                                 } else {
-                                    children = e.cuids.split_off(OV_MAX_BATCH_SIZE);
+                                    let mut children = e.cuids.split_off(OV_MAX_BATCH_SIZE);
                                     std::mem::swap(&mut children, &mut e.cuids);
                                     let mut batch = e.lb.split_off(OV_MAX_BATCH_SIZE);
                                     std::mem::swap(&mut batch, &mut e.lb);
                                     put = put.item(types::LS, AttributeValue::L(batch));
+                                    children
                                 }
                             }
                             _ => {
                                 panic!("unexpected entry match in Operation::Propagate")
                             }
-                        }
+                        };
 
                         bat_w_req =
                             save_item(&dyn_client, bat_w_req, retry_ch.clone(), put, table_name)
@@ -898,7 +908,7 @@ async fn persist(
                                     task,
                                     dyn_client,
                                     table_name, //
-                                    &mut cache.clone(), //
+                                    &cache, 
                                     &ovb,
                                     id,
                                 )
@@ -915,7 +925,6 @@ async fn persist(
                 // =============================================
                 while !finished {
                     bid += 1;
-                    let mut children: Vec<Uuid> = vec![];
 
                     for ovb in ovb_pk.get(&e.psk).unwrap() {
                         let mut sk_w_bid = sk.clone();
@@ -926,70 +935,78 @@ async fn persist(
                             .item(types::PK, AttributeValue::B(Blob::new(ovb.clone())))
                             .item(types::SK, AttributeValue::S(sk_w_bid));
 
-                        match e.entry.unwrap() {
+                        let children = match e.entry.unwrap() {
                             LS => {
                                 if e.ls.len() <= OV_MAX_BATCH_SIZE {
-                                    children = mem::take(&mut e.cuids);
+                                    let children = mem::take(&mut e.cuids);
                                     let batch: Vec<_> = std::mem::take(&mut e.ls);
                                     put = put.item(types::LS, AttributeValue::L(batch));
                                     finished = true;
+                                    children
                                 } else {
-                                    children = e.cuids.split_off(OV_MAX_BATCH_SIZE);
+                                    let mut children = e.cuids.split_off(OV_MAX_BATCH_SIZE);
                                     std::mem::swap(&mut children, &mut e.cuids);
                                     let mut batch = e.ls.split_off(OV_MAX_BATCH_SIZE);
                                     std::mem::swap(&mut batch, &mut e.ls);
                                     put = put.item(types::LS, AttributeValue::L(batch));
+                                    children
                                 }
                             }
 
                             LN => {
                                 if e.ln.len() <= OV_MAX_BATCH_SIZE {
-                                    children = mem::take(&mut e.cuids);
+                                    let children = mem::take(&mut e.cuids);
                                     let batch: Vec<_> = std::mem::take(&mut e.ln);
                                     put = put.item(types::LN, AttributeValue::L(batch));
                                     finished = true;
+                                    children
                                 } else {
-                                    children = e.cuids.split_off(OV_MAX_BATCH_SIZE);
+                                    let mut children = e.cuids.split_off(OV_MAX_BATCH_SIZE);
                                     std::mem::swap(&mut children, &mut e.cuids);
                                     let mut batch = e.ln.split_off(OV_MAX_BATCH_SIZE);
                                     std::mem::swap(&mut batch, &mut e.ln);
                                     put = put.item(types::LS, AttributeValue::L(batch));
+                                    children
                                 }
                             }
 
                             LBL => {
                                 if e.lbl.len() <= OV_MAX_BATCH_SIZE {
-                                    children = mem::take(&mut e.cuids);
+                                    let children = mem::take(&mut e.cuids);
                                     let batch: Vec<_> = std::mem::take(&mut e.lbl);
                                     put = put.item(types::LBL, AttributeValue::L(batch));
                                     finished = true;
+                                    children
                                 } else {
-                                    children = e.cuids.split_off(OV_MAX_BATCH_SIZE);
+                                    let mut children = e.cuids.split_off(OV_MAX_BATCH_SIZE);
                                     std::mem::swap(&mut children, &mut e.cuids);
                                     let mut batch = e.lbl.split_off(OV_MAX_BATCH_SIZE);
                                     std::mem::swap(&mut batch, &mut e.lbl);
                                     put = put.item(types::LS, AttributeValue::L(batch));
+                                    children
                                 }
                             }
 
                             LB => {
                                 if e.lb.len() <= OV_MAX_BATCH_SIZE {
-                                    children = mem::take(&mut e.cuids);
+                                    let children = mem::take(&mut e.cuids);
                                     let batch: Vec<_> = std::mem::take(&mut e.lb);
                                     put = put.item(types::LB, AttributeValue::L(batch));
                                     finished = true;
+                                    children
                                 } else {
-                                    children = e.cuids.split_off(OV_MAX_BATCH_SIZE);
+                                    let mut children = e.cuids.split_off(OV_MAX_BATCH_SIZE);
                                     std::mem::swap(&mut children, &mut e.cuids);
                                     let mut batch = e.lb.split_off(OV_MAX_BATCH_SIZE);
                                     std::mem::swap(&mut batch, &mut e.lb);
                                     put = put.item(types::LS, AttributeValue::L(batch));
+                                    children
                                 }
                             }
                             _ => {
                                 panic!("unexpected entry match in Operation::Propagate")
                             }
-                        }
+                        };
 
                         bat_w_req =
                             save_item(&dyn_client, bat_w_req, retry_ch.clone(), put, table_name)
@@ -1004,7 +1021,7 @@ async fn persist(
                                     task,
                                     dyn_client,
                                     table_name, //
-                                    &mut cache.clone(), //
+                                    &cache, 
                                     &ovb,
                                     id,
                                 )
@@ -1031,7 +1048,7 @@ async fn persist(
 
     if bat_w_req.len() > 0 {
         //print_batch(bat_w_req);
-        bat_w_req = persist_dynamo_batch(dyn_client, bat_w_req, retry_ch.clone(), table_name).await;
+        _ = persist_dynamo_batch(dyn_client, bat_w_req, retry_ch.clone(), table_name).await;
     }
 }
 
@@ -1045,7 +1062,7 @@ async fn fetch_p_edge_meta<'a, T: Into<String>>(
     dyn_client: &DynamoClient,
     uid: &Uuid,
     sk: &str,
-    graph_sn: T,
+    _graph_sn: T,
     node_types: &'a types::NodeTypes,
     table_name: &str,
     waits: event_stats::Waits,
@@ -1074,7 +1091,7 @@ async fn fetch_p_edge_meta<'a, T: Into<String>>(
             err
         )
     }
-    let mut di: types::DataItem = match result.unwrap().item {
+    let di: types::DataItem = match result.unwrap().item {
         None => panic!(
             "No type item found in fetch_node_type() for [{}] [{}]",
             uid, sk
@@ -1185,7 +1202,7 @@ async fn persist_dynamo_batch(
     new_bat_w_req
 }
 
-fn print_batch(bat_w_req: Vec<WriteRequest>) -> Vec<WriteRequest> {
+//fn print_batch(bat_w_req: Vec<WriteRequest>) -> Vec<WriteRequest> {
     // for r in bat_w_req {
     //     let WriteRequest {
     //         put_request: pr, ..
@@ -1197,7 +1214,7 @@ fn print_batch(bat_w_req: Vec<WriteRequest>) -> Vec<WriteRequest> {
     //     }
     // }
 
-    let new_bat_w_req: Vec<WriteRequest> = vec![];
+//     let new_bat_w_req: Vec<WriteRequest> = vec![];
 
-    new_bat_w_req
-}
+//     new_bat_w_req
+// }

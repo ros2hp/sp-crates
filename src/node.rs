@@ -1,14 +1,17 @@
-use super::*;
-
 use crate::rkey::RKey;
 use crate::types;
 
-use cache::{NewValue, Persistence};
-//use cache::event_stats::Waits;
-//use cache::Waits;
-use cache::event_stats; // use x::? where ? can be type, mod, crate
+
+use lrucache::{NewValue, Persistence};
+
+use lrucache::event_stats; // use x::? where ? can be type, mod, crate
 
 use std::fmt::Debug;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::mem;
+
+use crate::Dynamo;
 
 use aws_sdk_dynamodb::config::http::HttpResponse;
 use aws_sdk_dynamodb::operation::update_item::{UpdateItemError, UpdateItemOutput};
@@ -17,6 +20,7 @@ use aws_sdk_dynamodb::types::AttributeValue;
 use aws_sdk_dynamodb::Client as DynamoClient;
 
 use tokio::sync::Mutex;
+use tokio::time::Instant;
 
 use aws_smithy_runtime_api::client::result::SdkError;
 
@@ -221,8 +225,6 @@ impl Persistence<RKey, Dynamo> for RNode {
         // Note for LIST_APPEND Dynamodb will scan the entire attribute value before appending, so List should be relatively small < 10000.
         let table_name: String = db.table_name;
         let dyn_client = db.conn;
-        let mut target_uid: Vec<AttributeValue>;
-        let mut target_id: Vec<AttributeValue>;
         let mut update_expression: &str;
 
         //let mut node = arc_node.lock().await;
@@ -233,21 +235,23 @@ impl Persistence<RKey, Dynamo> for RNode {
         if init_cnt <= crate::EMBEDDED_CHILD_NODES {
             //println!("*PERSIST  ..init_cnt < EMBEDDED. {:?}", rkey);
 
-            if self.target_uid.len() <= crate::EMBEDDED_CHILD_NODES - init_cnt {
+            let (target_uid, target_id) = if self.target_uid.len() <= crate::EMBEDDED_CHILD_NODES - init_cnt {
                 // consume all of self.target*
-                target_uid = mem::take(&mut self.target_uid);
-                target_id = mem::take(&mut self.target_id);
+                let target_uid = mem::take(&mut self.target_uid);
+                let target_id = mem::take(&mut self.target_id);
+                (target_uid, target_id)
             } else {
                 // consume portion of self.target*
-                target_uid = self
+                let mut target_uid = self
                     .target_uid
                     .split_off(crate::EMBEDDED_CHILD_NODES - init_cnt);
                 std::mem::swap(&mut target_uid, &mut self.target_uid);
-                target_id = self
+                let mut target_id = self
                     .target_id
                     .split_off(crate::EMBEDDED_CHILD_NODES - init_cnt);
                 std::mem::swap(&mut target_id, &mut self.target_id);
-            }
+                (target_uid, target_id)
+            };
 
             if init_cnt == 0 {
                 // no data in db
@@ -297,10 +301,6 @@ impl Persistence<RKey, Dynamo> for RNode {
         );
         while self.target_uid.len() > 0 {
             ////println!("PERSIST  logic target_uid > 0 value {}  {:?}", self.target_uid.len(), rkey );
-
-            let mut target_uid: Vec<AttributeValue> = vec![];
-            let mut target_id: Vec<AttributeValue> = vec![];
-            let mut sk_w_bid: String;
             let event: event_stats::Event;
 
             match self.ocur {
@@ -312,27 +312,30 @@ impl Persistence<RKey, Dynamo> for RNode {
                 }
                 Some(mut ocur) => {
                     let batch_freespace = crate::OV_MAX_BATCH_SIZE - self.obcnt;
-                    if batch_freespace > 0 {
+                    let (target_uid, target_id, event,  sk_w_bid) = if batch_freespace > 0 {
                         // consume last of self.target*
-                        if self.target_uid.len() <= batch_freespace {
+                        let (target_uid, target_id) = if self.target_uid.len() <= batch_freespace {
                             // consume all of self.target*
-                            target_uid = mem::take(&mut self.target_uid);
-                            target_id = mem::take(&mut self.target_id);
+                            let target_uid = mem::take(&mut self.target_uid);
+                            let target_id = mem::take(&mut self.target_id);
                             self.obcnt += target_uid.len();
+                            (target_uid, target_id)
                         } else {
                             // consume portion of self.target*
-                            target_uid = self.target_uid.split_off(batch_freespace);
+                            let mut target_uid = self.target_uid.split_off(batch_freespace);
                             std::mem::swap(&mut target_uid, &mut self.target_uid);
-                            target_id = self.target_id.split_off(batch_freespace);
+                            let mut target_id = self.target_id.split_off(batch_freespace);
                             std::mem::swap(&mut target_id, &mut self.target_id);
                             self.obcnt = crate::OV_MAX_BATCH_SIZE;
-                        }
+                            (target_uid, target_id)
+                        };
                         update_expression =
                             "SET #target=list_append(#target, :tuid), #id=list_append(#id, :id)";
-                        event = event_stats::Event::PersistOvbAppend;
-                        sk_w_bid = rkey.1.clone();
+                        let event = event_stats::Event::PersistOvbAppend;
+                        let mut sk_w_bid = rkey.1.clone();
                         sk_w_bid.push('%');
                         sk_w_bid.push_str(&self.obid[ocur as usize].to_string());
+                        (target_uid, target_id, event, sk_w_bid)
                     } else {
                         // create a new batch optionally in a new OvB
                         if self.ovb.len() < crate::MAX_OV_BLOCKS {
@@ -352,29 +355,32 @@ impl Persistence<RKey, Dynamo> for RNode {
                             self.obid[ocur as usize] += 1;
                             self.obcnt = 0;
                         }
-                        if self.target_uid.len() <= crate::OV_MAX_BATCH_SIZE {
+                        let (target_uid, target_id) = if self.target_uid.len() <= crate::OV_MAX_BATCH_SIZE {
                             // consume remaining self.target*
-                            target_uid = mem::take(&mut self.target_uid);
-                            target_id = mem::take(&mut self.target_id);
+                            let target_uid = mem::take(&mut self.target_uid);
+                            let target_id = mem::take(&mut self.target_id);
                             self.obcnt += target_uid.len();
+                            (target_uid, target_id)
                         } else {
                             // consume leading portion of self.target*
-                            target_uid = self.target_uid.split_off(crate::OV_MAX_BATCH_SIZE);
+                            let mut target_uid = self.target_uid.split_off(crate::OV_MAX_BATCH_SIZE);
                             std::mem::swap(&mut target_uid, &mut self.target_uid);
-                            target_id = self.target_id.split_off(crate::OV_MAX_BATCH_SIZE);
+                            let mut target_id = self.target_id.split_off(crate::OV_MAX_BATCH_SIZE);
                             std::mem::swap(&mut target_id, &mut self.target_id);
                             self.obcnt = crate::OV_MAX_BATCH_SIZE;
-                        }
+                            (target_uid, target_id)
+                        };
                         // ================
                         // add OvB batches
                         // ================
-                        sk_w_bid = rkey.1.clone();
+                        let mut sk_w_bid = rkey.1.clone();
                         sk_w_bid.push('%');
                         sk_w_bid.push_str(&self.obid[ocur as usize].to_string());
 
                         update_expression = "SET #target = :tuid, #id = :id";
-                        event = event_stats::Event::PersistOvbSet;
-                    }
+                        let event = event_stats::Event::PersistOvbSet;
+                        (target_uid, target_id, event, sk_w_bid)
+                    };
                     // ================
                     // add OvB batches
                     // ================
@@ -405,7 +411,7 @@ impl Persistence<RKey, Dynamo> for RNode {
                     handle_result(&rkey, result);
                     //println!("PERSIST : batch written.....{:?}",rkey);
                 }
-            }
+            };
         } // end while
           // update OvB meta on edge predicate only if OvB are used.
         if self.ovb.len() > 0 {
@@ -446,6 +452,14 @@ impl Persistence<RKey, Dynamo> for RNode {
 
             handle_result(&rkey, result);
         }
+
+        // send task completed msg to persist service
+        // if let Err(err) = persist_completed_send_ch.send((rkey.clone(), task)).await {
+        //     println!(
+        //         "Sending completed persist msg to waiting client failed: {}",
+        //         err
+        //     );
+        // }
         println!("{} *PERSIST  Exit    {:?}", task, rkey);
         ()
     }
