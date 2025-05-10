@@ -196,7 +196,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
         env::var("MAX_PERSIST_TASKS").expect("env variable `MAX_PERSIST_TASKS` should be set in profile");
     let graph = env::var("GRAPH_NAME").expect("env variable `GRAPH_NAME` should be set in profile");
     let lru_capacity_ = env::var("LRU_CAPACITY").expect("env variable `LRU_CAPACITY` should be set in profile");
-    let table_name = "RustGraph.dev.10";
+    let table_name = "RustGraph.dev.11";
     let evict_tries = "3";
     // ===========================
     // 2. Print config
@@ -788,6 +788,7 @@ async fn persist(
                             table_name, //
                             &cache, 
                             &target_uid,
+                            0,
                             id,
                         )
                         .await;
@@ -910,7 +911,8 @@ async fn persist(
                                     table_name, //
                                     &cache, 
                                     &ovb,
-                                    id,
+                                    bid,
+                                    id, 
                                 )
                                 .await;
                             }
@@ -1023,7 +1025,8 @@ async fn persist(
                                     table_name, //
                                     &cache, 
                                     &ovb,
-                                    id,
+                                    bid,
+                                    id  ,
                                 )
                                 .await;
                             } //unlock cache and edgeItem locks

@@ -33,6 +33,7 @@ pub struct RNode {
     pub init_cnt: u32,  // edge count at node initialisation (new or db sourced)
     // accumlate edge data into these Vec's
     pub target_uid: Vec<AttributeValue>,
+    pub target_bid: Vec<AttributeValue>,
     pub target_id: Vec<AttributeValue>,
     // metadata that describes how to populate target* into db attributes when persisted
     pub ovb: Vec<Uuid>, // Uuid of OvB
@@ -52,6 +53,7 @@ impl RNode {
             rvs_sk: String::new(), //
             init_cnt: 0,           // edge cnt at initialisation (e.g as read from database)
             target_uid: vec![],
+            target_bid: vec![],
             target_id: vec![], //
             //
             ovb: vec![],
@@ -122,11 +124,13 @@ impl RNode {
         }
     }
 
-    pub fn add_reverse_edge(&mut self, target_uid: Uuid, target_id: u32) {
+    pub fn add_reverse_edge(&mut self, target_uid: Uuid,  target_bid: u32, target_id: u32) {
         //self.cnt += 1; // redundant, use container_uuid.len() and add it to db cnt attribute.
         // accumulate edges into these Vec's. Distribute the data across Dynamodb attributes (aka OvB batches) when persisting to database.
         self.target_uid
             .push(AttributeValue::B(Blob::new(target_uid.as_bytes())));
+        self.target_bid
+        .push(AttributeValue::N(target_bid.to_string()));
         self.target_id
             .push(AttributeValue::N(target_id.to_string()));
     }
@@ -201,6 +205,7 @@ impl NewValue<RKey, RNode> for RNode {
             rvs_sk: rkey.1.clone(), //
             init_cnt: 0,
             target_uid: vec![], // target_uid.len() total edges added in current sp session
+            target_bid: vec![],
             target_id: vec![],  //
             //
             ovb: vec![],
@@ -235,30 +240,37 @@ impl Persistence<RKey, Dynamo> for RNode {
         if init_cnt <= crate::EMBEDDED_CHILD_NODES {
             //println!("*PERSIST  ..init_cnt < EMBEDDED. {:?}", rkey);
 
-            let (target_uid, target_id) = if self.target_uid.len() <= crate::EMBEDDED_CHILD_NODES - init_cnt {
+            let (target_uid, target_bid, target_id) = if self.target_uid.len() <= crate::EMBEDDED_CHILD_NODES - init_cnt {
                 // consume all of self.target*
                 let target_uid = mem::take(&mut self.target_uid);
+                let target_bid = mem::take(&mut self.target_bid);
                 let target_id = mem::take(&mut self.target_id);
-                (target_uid, target_id)
+                (target_uid, target_bid, target_id)
             } else {
                 // consume portion of self.target*
                 let mut target_uid = self
                     .target_uid
                     .split_off(crate::EMBEDDED_CHILD_NODES - init_cnt);
                 std::mem::swap(&mut target_uid, &mut self.target_uid);
+
+                let mut target_bid = self
+                .target_bid
+                .split_off(crate::EMBEDDED_CHILD_NODES - init_cnt);
+                std::mem::swap(&mut target_bid, &mut self.target_bid);
+
                 let mut target_id = self
                     .target_id
                     .split_off(crate::EMBEDDED_CHILD_NODES - init_cnt);
                 std::mem::swap(&mut target_id, &mut self.target_id);
-                (target_uid, target_id)
+                (target_uid, target_bid, target_id)
             };
 
             if init_cnt == 0 {
                 // no data in db
-                update_expression = "SET #cnt = :cnt, #target = :tuid, #id = :id";
+                update_expression = "SET #cnt = :cnt, #target = :tuid,  #bid = :bid, #id = :id";
             } else {
                 // append to existing data
-                update_expression = "SET #target=list_append(#target, :tuid), #id=list_append(#id,:id), #cnt = :cnt";
+                update_expression = "SET #target=list_append(#target, :tuid), #bid=list_append(#bid,:bid), #id=list_append(#id,:id), #cnt = :cnt";
             }
             let before = Instant::now();
             //update edge_item
@@ -276,6 +288,8 @@ impl Persistence<RKey, Dynamo> for RNode {
                 .expression_attribute_values(":cnt", AttributeValue::N(edge_cnt.to_string()))
                 .expression_attribute_names("#target", types::TARGET_UID)
                 .expression_attribute_values(":tuid", AttributeValue::L(target_uid))
+                .expression_attribute_names("#bid", types::TARGET_BID)
+                .expression_attribute_values(":bid", AttributeValue::L(target_bid))
                 .expression_attribute_names("#id", types::TARGET_ID)
                 .expression_attribute_values(":id", AttributeValue::L(target_id))
                 //.return_values(ReturnValue::AllNew)
@@ -312,30 +326,33 @@ impl Persistence<RKey, Dynamo> for RNode {
                 }
                 Some(mut ocur) => {
                     let batch_freespace = crate::OV_MAX_BATCH_SIZE - self.obcnt;
-                    let (target_uid, target_id, event,  sk_w_bid) = if batch_freespace > 0 {
+                    let (target_uid, target_bid,  target_id, event,  sk_w_bid) = if batch_freespace > 0 {
                         // consume last of self.target*
-                        let (target_uid, target_id) = if self.target_uid.len() <= batch_freespace {
+                        let (target_uid, target_bid, target_id) = if self.target_uid.len() <= batch_freespace {
                             // consume all of self.target*
                             let target_uid = mem::take(&mut self.target_uid);
+                            let target_bid = mem::take(&mut self.target_bid);
                             let target_id = mem::take(&mut self.target_id);
                             self.obcnt += target_uid.len();
-                            (target_uid, target_id)
+                            (target_uid, target_bid, target_id)
                         } else {
                             // consume portion of self.target*
                             let mut target_uid = self.target_uid.split_off(batch_freespace);
                             std::mem::swap(&mut target_uid, &mut self.target_uid);
+                            let mut target_bid = self.target_bid.split_off(batch_freespace);
+                            std::mem::swap(&mut target_bid, &mut self.target_bid);
                             let mut target_id = self.target_id.split_off(batch_freespace);
                             std::mem::swap(&mut target_id, &mut self.target_id);
                             self.obcnt = crate::OV_MAX_BATCH_SIZE;
-                            (target_uid, target_id)
+                            (target_uid, target_bid, target_id)
                         };
                         update_expression =
-                            "SET #target=list_append(#target, :tuid), #id=list_append(#id, :id)";
+                            "SET #target=list_append(#target, :tuid), #bid=list_append(#bid, :bid), #id=list_append(#id, :id)";
                         let event = event_stats::Event::PersistOvbAppend;
                         let mut sk_w_bid = rkey.1.clone();
                         sk_w_bid.push('%');
                         sk_w_bid.push_str(&self.obid[ocur as usize].to_string());
-                        (target_uid, target_id, event, sk_w_bid)
+                        (target_uid, target_bid, target_id, event, sk_w_bid)
                     } else {
                         // create a new batch optionally in a new OvB
                         if self.ovb.len() < crate::MAX_OV_BLOCKS {
@@ -355,20 +372,23 @@ impl Persistence<RKey, Dynamo> for RNode {
                             self.obid[ocur as usize] += 1;
                             self.obcnt = 0;
                         }
-                        let (target_uid, target_id) = if self.target_uid.len() <= crate::OV_MAX_BATCH_SIZE {
+                        let (target_uid,target_bid, target_id) = if self.target_uid.len() <= crate::OV_MAX_BATCH_SIZE {
                             // consume remaining self.target*
                             let target_uid = mem::take(&mut self.target_uid);
+                            let target_bid = mem::take(&mut self.target_bid);
                             let target_id = mem::take(&mut self.target_id);
                             self.obcnt += target_uid.len();
-                            (target_uid, target_id)
+                            (target_uid, target_bid, target_id)
                         } else {
                             // consume leading portion of self.target*
                             let mut target_uid = self.target_uid.split_off(crate::OV_MAX_BATCH_SIZE);
                             std::mem::swap(&mut target_uid, &mut self.target_uid);
+                            let mut target_bid = self.target_bid.split_off(crate::OV_MAX_BATCH_SIZE);
+                            std::mem::swap(&mut target_bid, &mut self.target_bid);
                             let mut target_id = self.target_id.split_off(crate::OV_MAX_BATCH_SIZE);
                             std::mem::swap(&mut target_id, &mut self.target_id);
                             self.obcnt = crate::OV_MAX_BATCH_SIZE;
-                            (target_uid, target_id)
+                            (target_uid, target_bid, target_id)
                         };
                         // ================
                         // add OvB batches
@@ -379,7 +399,7 @@ impl Persistence<RKey, Dynamo> for RNode {
 
                         update_expression = "SET #target = :tuid, #id = :id";
                         let event = event_stats::Event::PersistOvbSet;
-                        (target_uid, target_id, event, sk_w_bid)
+                        (target_uid, target_bid, target_id, event, sk_w_bid)
                     };
                     // ================
                     // add OvB batches
@@ -399,6 +419,8 @@ impl Persistence<RKey, Dynamo> for RNode {
                         // reverse edge
                         .expression_attribute_names("#target", types::TARGET_UID)
                         .expression_attribute_values(":tuid", AttributeValue::L(target_uid))
+                        .expression_attribute_names("#bid", types::TARGET_BID)
+                        .expression_attribute_values(":bid", AttributeValue::L(target_bid))
                         .expression_attribute_names("#id", types::TARGET_ID)
                         .expression_attribute_values(":id", AttributeValue::L(target_id))
                         //.return_values(ReturnValue::AllNew)

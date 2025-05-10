@@ -23,7 +23,9 @@ impl RKey {
         table_name: &str, //
         cache: &Cache<RKey, RNode>, 
         target: &Uuid,
-        id: usize,
+        bid: usize,
+        id : usize
+
     ) {
 
         match cache.get(&self, task).await {
@@ -35,7 +37,7 @@ impl RKey {
                 node_guard
                     .load_ovb_metadata(dyn_client, table_name, self, task)
                     .await;
-                node_guard.add_reverse_edge(target.clone(), id as u32);
+                node_guard.add_reverse_edge(target.clone(), bid as u32, id as u32);
                 
                 cache.release(&self).await;
           
@@ -45,7 +47,7 @@ impl RKey {
                 //println!("{} RKEY add_reverse_edge: Existing  1 {:?} ", task, self);
                 let mut node_guard = node.lock().await;
 
-                node_guard.add_reverse_edge(target.clone(), id as u32);
+                node_guard.add_reverse_edge(target.clone(), bid as u32, id as u32);
 
                 cache.release(self).await;
             }
