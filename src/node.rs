@@ -37,13 +37,11 @@ pub struct RNode {
     pub target_id: Vec<AttributeValue>,
     // metadata that describes how to populate target* into db attributes when persisted
     pub ovb: Vec<Uuid>, // Uuid of OvB
-    pub obid: Vec<u32>, // current batch id in each OvB
+    pub obid: Vec<u32>, // last batch id in each OvB
     //pub oblen: Vec<u32>, // count of items in current batch in current batch in each OvB block
-    pub oid: Vec<u32>,
+    //pub oid: Vec<u32>, // ??
     pub ocur: Option<u8>, // current Ovb in use
     pub obcnt: usize,     // edge count in current batch of current OvB
-                          //
-                          //
 }
 
 impl RNode {
@@ -59,8 +57,8 @@ impl RNode {
             ovb: vec![],
             obid: vec![],
             //oblen: vec![],
-            obcnt: 0,
-            oid: vec![],
+            obcnt: 0,        // OCNT
+            //oid: vec![],
             ocur: None, //
         }
     }
@@ -112,7 +110,7 @@ impl RNode {
         self.obid = ri.obid;
         self.obcnt = ri.obcnt;
         //self.oblen = ri.oblen;
-        self.oid = ri.oid;
+        //self.oid = ri.oid;
         self.ocur = ri.ocur;
 
         if self.ovb.len() > 0 {
@@ -206,14 +204,14 @@ impl NewValue<RKey, RNode> for RNode {
             init_cnt: 0,
             target_uid: vec![], // target_uid.len() total edges added in current sp session
             target_bid: vec![],
-            target_id: vec![],  //
+            target_id: vec![],  
             //
-            ovb: vec![],
-            obcnt: 0,
+            ovb: vec![],       
+            obcnt: 0,          
             //oblen: vec![],
-            obid: vec![],
-            oid: vec![],
-            ocur: None, //
+            obid: vec![],      
+            //oid: vec![],       
+            ocur: None,       
         }))
     }
 }
@@ -397,7 +395,7 @@ impl Persistence<RKey, Dynamo> for RNode {
                         sk_w_bid.push('%');
                         sk_w_bid.push_str(&self.obid[ocur as usize].to_string());
 
-                        update_expression = "SET #target = :tuid, #id = :id";
+                        update_expression = "SET #target = :tuid, #bid = :bid, #id = :id";
                         let event = event_stats::Event::PersistOvbSet;
                         (target_uid, target_bid, target_id, event, sk_w_bid)
                     };
@@ -474,14 +472,6 @@ impl Persistence<RKey, Dynamo> for RNode {
 
             handle_result(&rkey, result);
         }
-
-        // send task completed msg to persist service
-        // if let Err(err) = persist_completed_send_ch.send((rkey.clone(), task)).await {
-        //     println!(
-        //         "Sending completed persist msg to waiting client failed: {}",
-        //         err
-        //     );
-        // }
         println!("{} *PERSIST  Exit    {:?}", task, rkey);
         ()
     }

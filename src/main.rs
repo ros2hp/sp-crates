@@ -52,7 +52,7 @@ const _LDT: u8 = 5;
 // node with substantial scalar data this parameter should be corresponding small (< 5) to minimise the space consumed
 // within the parent block. The more space consumed by the embedded child node data the more RCUs required to read the parent RNode data,
 // which will be an overhead in circumstances where child data is not required.
-const EMBEDDED_CHILD_NODES: usize = 50; //10; // prod value: 20
+const EMBEDDED_CHILD_NODES: usize = 4;//50; //10; // prod value: 20
 
 // MAX_OV_BLOCKS - max number of overflow blocks. Set to the desired number of concurrent reads on overflow blocks ie. the degree of parallelism required. Prod may have upto 100.
 // As each block resides in its own UUID (PKey) there shoud be little contention when reading them all in parallel. When max is reached the overflow
@@ -63,7 +63,7 @@ const MAX_OV_BLOCKS: usize = 5; // prod value : 100
 // OV_MAX_BATCH_SIZE - number of items to an overflow batch. Always fixed at this value.
 // The limit is checked using the database SIZE function during insert of the child data into the overflow block.
 // An overflow block has an unlimited number of batches.
-const OV_MAX_BATCH_SIZE: usize = 160; //15; // Prod 100 to 500.
+const OV_MAX_BATCH_SIZE: usize = 4;//160; //15; // Prod 100 to 500.
 
 // OV_BATCH_THRESHOLD, initial number of batches in an overflow block before creating new Overflow block.
 // Once all overflow blocks have been created (MAX_OV_BLOCKS), blocks are randomly chosen and each block
@@ -429,7 +429,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send + 'static>
                 // ===================================================================
                 // 9.2.3.0 query on p_node edge and get OvBs from Nd attribute of edge
                 // ===================================================================
-                let bat_w_req: Vec<WriteRequest> = vec![];
+                let mut bat_w_req: Vec<WriteRequest> = vec![];
 
                 for cuid in children {
                     //let cuid_p = cuid.clone();
@@ -820,7 +820,7 @@ async fn persist(
 
                         let children = match e.entry.unwrap() {
                             LS => {
-                                if e.ls.len() <= OV_MAX_BATCH_SIZE {
+                                if e.ls.len() <= OV_MAX_BATCH_SIZE { 
                                     let children = mem::take(&mut e.cuids);
                                     let batch: Vec<_> = std::mem::take(&mut e.ls);
                                     put = put.item(types::LS, AttributeValue::L(batch));
@@ -1102,31 +1102,32 @@ async fn fetch_p_edge_meta<'a, T: Into<String>>(
         Some(v) => v.into(),
     };
 
-    let ovb_start_idx = di
-        .xf
-        .as_ref()
-        .expect("xf is None")
-        .iter()
-        .filter(|&&v| v < 4)
-        .fold(0, |a, _| a + 1); // xf idx entry of first Ovb Uuid
-    if ovb_start_idx > EMBEDDED_CHILD_NODES {
+    let ovb_cnt = di
+    .xf
+    .as_ref()
+    .expect("xf is None")
+    .iter()
+    .filter(|&&v| v == 4)
+    .fold(0, |a, _| a + 1); // xf idx entry of first Ovb Uuid
+    if ovb_cnt > MAX_OV_BLOCKS {
         panic!(
-            "OvB inconsistency: XF embedded entry {} does not match EMBEDDED_CHILD_NODES {}",
-            ovb_start_idx, EMBEDDED_CHILD_NODES
+            "OvB inconsistency: XF overflow blcoks {} exceeeds MAX_OV_BLOCKS {}",
+            ovb_cnt, MAX_OV_BLOCKS
         );
     }
 
-    let ovb_cnt = di
-        .xf
-        .expect("xf is None")
-        .iter()
-        .filter(|&&v| v == 4)
-        .fold(0, |a, _| a + 1);
-    if ovb_cnt > MAX_OV_BLOCKS {
-        panic!(
-            "OvB inconsistency: XF attribute contains {} entry, MAX_OV_BLOCKS is {}",
-            ovb_cnt, MAX_OV_BLOCKS
-        );
+    let ovb_start_idx = di
+                .xf
+                .as_ref()
+                .expect("xf is None")
+                .iter()
+                .filter(|&&v| v < 4)
+                .fold(0, |a, _| a + 1); // xf idx entry of first Ovb Uuid
+    if ovb_cnt > 0 && ovb_start_idx != EMBEDDED_CHILD_NODES {
+                panic!(
+                    "OvB inconsistency: XF embedded entry {} does not match EMBEDDED_CHILD_NODES {}",
+                    ovb_start_idx, EMBEDDED_CHILD_NODES
+                );
     }
 
     let ovb_pk: Vec<Uuid> = di.nd.expect("nd is None").drain(ovb_start_idx..).collect(); //TODO:consider split_off + mem::swap
@@ -1201,7 +1202,7 @@ async fn persist_dynamo_batch(
             }
         }
     }
-    let new_bat_w_req: Vec<WriteRequest> = vec![];
+    let mut new_bat_w_req: Vec<WriteRequest> = vec![];
     new_bat_w_req
 }
 
