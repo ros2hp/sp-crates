@@ -341,10 +341,8 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 waits.record(event_stats::Event::GetNotInCacheGet,Instant::now().duration_since(before)).await; 
                 let arc_value=arc_value.clone();
 
-                let persist_query_ch = cache_guard.persist_query_ch.clone();
                 let lru_ch=cache_guard.lru_ch.clone();
-                //let waits = cache_guard.waits.clone();
-                let persisting = cache_guard.persisting(&key);
+
                 let mut loading = cache_guard.loading(&key);
                 cache_guard.set_inuse(key.clone()); // prevents concurrent persist
                 // =========================
@@ -356,20 +354,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // =============================================
                 before = Instant::now();  
                 waits.record(event_stats::Event::GetNotInCacheValueLock,Instant::now().duration_since(before)).await; 
-                // ===============================================================
-                // serialise access to value - prevents concurrent operations on key
-                // ===============================================================  
-                //let value_guard = arc_value.lock().await;
-                // ======================
-                // IS NODE persisting 
-                // ======================
-                if persisting {
-                    before = Instant::now(); 
-                    //println!("{} CACHE key: in CACHE check if still persisting ....{:?}", task,key);
-                    self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;    
-                    waits.record(event_stats::Event::GetPersistingCheckInCache,Instant::now().duration_since(before)).await;     
-                }
-                // ======================
+                // ==========c============
                 // IS NODE loading 
                 // ======================
                 let mut l = 0;
@@ -382,7 +367,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                         loading = cache_guard.loading(&key);
                     }
                     if loading {
-                        sleep(Duration::from_millis(10)).await;
+                        sleep(Duration::from_millis(2)).await;
                     } 
                     l += 1;
                 }
