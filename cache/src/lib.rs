@@ -319,7 +319,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                     before =Instant::now(); 
                     println!("{} CACHE: - Not Cached: waiting on persisting due to eviction {:?}",task, key);
                     self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;
-                    waits.record(event_stats::Event::GetPersistingCheckNotInCache,Instant::now().duration_since(before)).await;    
+                    waits.record(event_stats::Event::GetNotInCachePersistingWait,Instant::now().duration_since(before)).await;    
                 }
                 // ==================================================================
                 // Send Attach to LRU - will set_persistence, set_inuse for evict key 
@@ -361,7 +361,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 if loading {
                     before = Instant::now();
                     load_ch_rcv.unwrap().recv().await.unwrap();
-                    waits.record(event_stats::Event::GetInCacheLoading,Instant::now().duration_since(before)).await;
+                    waits.record(event_stats::Event::GetInCacheLoadingWait,Instant::now().duration_since(before)).await;
                 }
 
                 if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::MoveToHead)).await {
