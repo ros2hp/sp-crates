@@ -12,6 +12,7 @@ use crate::service::lru;
 
 use tokio::time::{Instant,sleep,Duration};
 use tokio::sync::Mutex;
+use tokio::sync::broadcast;
 
 pub enum CacheValue<V> {
     New(V),
@@ -61,7 +62,7 @@ struct InnerCache<K,V> {
     // cache entry states
     inuse : HashMap<K,u8>,
     persisting: HashSet<K>,
-    loading: HashSet<K>,
+    loading: HashMap<K, (broadcast::Sender::<u8>, broadcast::Receiver::<u8>)>,
     // performance stats rep
     waits : event_stats::Waits,
     //
@@ -100,7 +101,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + std::marker::Sync + Se
                 //,evicted : HashSet::new()
                 ,inuse : HashMap::new()
                 ,persisting: HashSet::new()
-                ,loading: HashSet::new()
+                ,loading: HashMap::new()
                 //
                 ,waits: waits.clone()
                 ,lru_flush_ch
@@ -215,20 +216,35 @@ impl<K : Hash + Eq + Debug + Clone,V : Clone + Debug >  InnerCache<K,V>
 
     fn set_loading(&mut self, key: K) {
         //println!("Cache: set_loading {:?}",&key);
-        self.loading.insert(key);
+        let (sndr,recv) = broadcast::channel::<u8>(1);
+        self.loading.insert(key,(sndr,recv));
+    }
+
+    fn loading(&mut self, key: &K) -> (bool, Option<broadcast::Receiver::<u8>>) {
+        match self.loading.get(key) {
+            None => {//println!("Cache: loading false");
+                    (false, None)
+                    },
+            Some((s,_)) => {//println!("Cache: loading true");
+                            (true, Some(s.subscribe()))
+            },
+        }
     }
 
     fn unset_loading(&mut self, key: &K) {
         //println!("Cache: unset_loading {:?}",key);
-        self.loading.remove(key);
+        match self.loading.remove(key) {
+            None => {0},
+            Some((s,_)) => s.send(1).unwrap(),
+        };
     }
 
-    fn loading(&self, key: &K) -> bool {
-        match self.loading.get(key) {
-            None => false,
-            Some(_) => true,
-        }
-    }
+    // fn loading(&self, key: &K) -> bool {
+    //     match self.loading.get(key) {
+    //         None => false,
+    //         Some(_) => true,
+    //     }
+    // }
 
     fn set_persisting(&mut self, key: K) {
         self.persisting.insert(key);
@@ -289,6 +305,8 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
             
             None => {
 
+
+
                 println!("{} CACHE: get -  Not Cached: add to cache {:?}", task, key);
                 waits.record(event_stats::Event::GetInCacheGet,Instant::now().duration_since(before)).await; 
                 let lru_ch = cache_guard.lru_ch.clone();
@@ -343,42 +361,31 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
 
                 let lru_ch=cache_guard.lru_ch.clone();
 
-                let mut loading = cache_guard.loading(&key);
                 cache_guard.set_inuse(key.clone()); // prevents concurrent persist
+                let (loading,load_ch_rcv) = cache_guard.loading(&key);
+                println!("InCache: loading {}",loading);
                 // =========================
                 // release cache lock
                 // =========================
                 drop(cache_guard);
-                // =============================================
-                // serialise processing on concurrent key-value
-                // =============================================
+
                 before = Instant::now();  
                 waits.record(event_stats::Event::GetNotInCacheValueLock,Instant::now().duration_since(before)).await; 
                 // ==========c============
                 // IS NODE loading 
                 // ======================
                 let mut l = 0;
-                while loading {
-                    if l == 0 {
-                        println!("{} Cache: node loading.. {:?}",task, &key);
-                    }
-                    {
-                        let cache_guard = self.0.lock().await; 
-                        loading = cache_guard.loading(&key);
-                    }
-                    if loading {
-                        sleep(Duration::from_millis(2)).await;
-                    } 
-                    l += 1;
-                }
-                if l > 0 {
-                    //println!("{} Cache: Node loaded - looped {}  {:?}",task, l, &key); 
-                    waits.record(event_stats::Event::GetInCacheLoading,Instant::now().duration_since(start_time)).await; 
+                if loading {
+                    before = Instant::now();
+                    load_ch_rcv.unwrap().recv().await.unwrap();
+                    waits.record(event_stats::Event::GetInCacheLoading,Instant::now().duration_since(before)).await;
                 }
 
                 if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::MoveToHead)).await {
                     panic!("Send on lru_move_to_head_ch failed {}",err)
                 };
+                
+                // wait for loading complete broadcast msg
                 let _ = srv_resp_rx.recv().await;
                 waits.record(event_stats::Event::GetInCacheMoveToHeadResp,Instant::now().duration_since(start_time)).await; 
 
