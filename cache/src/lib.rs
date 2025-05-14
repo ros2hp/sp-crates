@@ -239,13 +239,6 @@ impl<K : Hash + Eq + Debug + Clone,V : Clone + Debug >  InnerCache<K,V>
         };
     }
 
-    // fn loading(&self, key: &K) -> bool {
-    //     match self.loading.get(key) {
-    //         None => false,
-    //         Some(_) => true,
-    //     }
-    // }
-
     fn set_persisting(&mut self, key: K) {
         self.persisting.insert(key);
     }
@@ -272,16 +265,8 @@ impl<K : Hash + Eq + Debug + Clone,V : Clone + Debug >  InnerCache<K,V>
 
 impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V>
 {
-
-    // pub async fn unlock(&self, key: &K) {
-    //     //println!("CACHE: cache.unlock {:?}",key);
-    //     self.0.lock().await.unset_inuse(key);
-    //     //println!("CACHE: cache.unlock DONE");
-    // }
-
-
-    // unset loading
-    pub async fn release(&self, key: &K) {
+    // 
+    pub async fn unlock(&self, key: &K) {
         println!("CACHE: release  {:?}",key);
         let mut cache_guard = self.0.lock().await;
         cache_guard.unset_loading(key); // now can be read by other 
@@ -363,7 +348,6 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
 
                 cache_guard.set_inuse(key.clone()); // prevents concurrent persist
                 let (loading,load_ch_rcv) = cache_guard.loading(&key);
-                println!("InCache: loading {}",loading);
                 // =========================
                 // release cache lock
                 // =========================
@@ -374,7 +358,6 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // ==========c============
                 // IS NODE loading 
                 // ======================
-                let mut l = 0;
                 if loading {
                     before = Instant::now();
                     load_ch_rcv.unwrap().recv().await.unwrap();

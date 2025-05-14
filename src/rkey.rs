@@ -38,8 +38,6 @@ impl RKey {
                     .load_ovb_metadata(dyn_client, table_name, self, task)
                     .await;
                 node_guard.add_reverse_edge(target.clone(), bid as u32, id as u32);
-                
-                cache.release(&self).await;
           
             }
 
@@ -48,9 +46,11 @@ impl RKey {
                 let mut node_guard = node.lock().await;
 
                 node_guard.add_reverse_edge(target.clone(), bid as u32, id as u32);
-
-                cache.release(self).await;
+                
             }
         }
+        // release resources held by key 
+        cache.unlock(self).await;
+
     }
 }
