@@ -62,7 +62,7 @@ struct InnerCache<K,V> {
     // cache entry states
     inuse : HashMap<K,u8>,
     persisting: HashSet<K>,
-    loading: HashMap<K, (broadcast::Sender::<u8>, broadcast::Receiver::<u8>)>,
+    loading: HashMap<K, broadcast::Sender::<u8>>,
     // performance stats rep
     waits : event_stats::Waits,
     //
@@ -215,27 +215,21 @@ impl<K : Hash + Eq + Debug + Clone,V : Clone + Debug >  InnerCache<K,V>
     }
 
     fn set_loading(&mut self, key: K) {
-        //println!("Cache: set_loading {:?}",&key);
-        let (sndr,recv) = broadcast::channel::<u8>(1);
-        self.loading.insert(key,(sndr,recv));
+        let (sndr,_) = broadcast::channel::<u8>(1);
+        self.loading.insert(key,sndr);
     }
 
     fn loading(&mut self, key: &K) -> (bool, Option<broadcast::Receiver::<u8>>) {
         match self.loading.get(key) {
-            None => {//println!("Cache: loading false");
-                    (false, None)
-                    },
-            Some((s,_)) => {//println!("Cache: loading true");
-                            (true, Some(s.subscribe()))
-            },
+            None =>  (false, None),
+            Some(s) => (true, Some(s.subscribe())),
         }
     }
 
     fn unset_loading(&mut self, key: &K) {
-        //println!("Cache: unset_loading {:?}",key);
         match self.loading.remove(key) {
             None => {0},
-            Some((s,_)) => s.send(1).unwrap(),
+            Some(s) => s.send(1).unwrap(),
         };
     }
 
@@ -304,10 +298,6 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 cache_guard.set_inuse(key.clone());
                 let persisting = cache_guard.persisting(&key);
                 cache_guard.set_loading(key.clone());
-                // ===============================================================
-                // serialise access to value - prevents concurrent operations on key - ** not necessary - app will lock **
-                // ===============================================================                
-                //let value_guard = arc_value.lock().await;
                 // ============================================================================================================
                 // release cache lock with value still locked - value now in cache, so next get on key will go to in-cache path
                 // ============================================================================================================
@@ -317,9 +307,9 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // =======================
                 if persisting {
                     before =Instant::now(); 
-                    println!("{} CACHE: - Not Cached: waiting on persisting due to eviction {:?}",task, key);
+                    //println!("{} CACHE: - Not Cached: waiting on persisting due to eviction {:?}",task, key);
                     self.wait_for_persist_to_complete(task, key.clone(),persist_query_ch, waits.clone()).await;
-                    waits.record(event_stats::Event::GetNotInCachePersistingWait,Instant::now().duration_since(before)).await;    
+                    waits.record(event_stats::Event::GetNotInCachePersistWait,Instant::now().duration_since(before)).await;    
                 }
                 // ==================================================================
                 // Send Attach to LRU - will set_persistence, set_inuse for evict key 
@@ -347,7 +337,7 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 let lru_ch=cache_guard.lru_ch.clone();
 
                 cache_guard.set_inuse(key.clone()); // prevents concurrent persist
-                let (loading,load_ch_rcv) = cache_guard.loading(&key);
+                let (loading,broadcast_ch_rcv) = cache_guard.loading(&key);
                 // =========================
                 // release cache lock
                 // =========================
@@ -360,8 +350,8 @@ impl<K: Hash + Eq + Clone + Debug, V:  Clone + NewValue<K,V> + Debug>  Cache<K,V
                 // ======================
                 if loading {
                     before = Instant::now();
-                    load_ch_rcv.unwrap().recv().await.unwrap();
-                    waits.record(event_stats::Event::GetInCacheLoadingWait,Instant::now().duration_since(before)).await;
+                    broadcast_ch_rcv.unwrap().recv().await.unwrap();
+                    waits.record(event_stats::Event::GetInCacheLoadWait,Instant::now().duration_since(before)).await;
                 }
 
                 if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::MoveToHead)).await {
