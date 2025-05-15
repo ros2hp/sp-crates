@@ -62,7 +62,7 @@ struct InnerCache<K,V> {
     // cache entry states
     inuse : HashMap<K,u8>,
     persisting: HashSet<K>,
-    loading: HashMap<K, broadcast::Sender::<u8>>,
+    loading: HashMap<K, (broadcast::Sender::<u8>,broadcast::Receiver::<u8>)>,
     // performance stats rep
     waits : event_stats::Waits,
     //
@@ -215,21 +215,21 @@ impl<K : Hash + Eq + Debug + Clone,V : Clone + Debug >  InnerCache<K,V>
     }
 
     fn set_loading(&mut self, key: K) {
-        let (sndr,_) = broadcast::channel::<u8>(1);
-        self.loading.insert(key,sndr);
+        let (sndr,rcv) = broadcast::channel::<u8>(1);
+        self.loading.insert(key,(sndr,rcv));
     }
 
     fn loading(&mut self, key: &K) -> (bool, Option<broadcast::Receiver::<u8>>) {
         match self.loading.get(key) {
             None =>  (false, None),
-            Some(s) => (true, Some(s.subscribe())),
+            Some((s,_)) => (true, Some(s.subscribe())),
         }
     }
 
     fn unset_loading(&mut self, key: &K) {
         match self.loading.remove(key) {
             None => {0},
-            Some(s) => s.send(1).unwrap(),
+            Some((s,_)) => s.send(1).unwrap(),
         };
     }
 
