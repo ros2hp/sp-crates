@@ -204,40 +204,6 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + Sync + 'static,
                     //println!("{} PERSIST finished completed msg:  key {:?}  tasks {} ", task, persist_key, tasks);
                 },
 
-                // Some(query_msg) = client_query_rx.recv() => {
-
-                //     // timing issues between main and persist tasks requires that 
-                //     // we check if node is still persisting which is set by LRU service 
-                //     // and is the source of truth.
-                //     let still_persisting = cache.0.lock().await.persisting(&query_msg.0);
-
-                //     if !still_persisting {
-                //         // send ACK (false) to client 
-                //         println!("{} PERSIST : not still_persisting - send false {:?}",query_msg.2, query_msg.0);
-                //         if let Err(err) = query_msg.1.send(false).await {
-                //             panic!("Error in sending query_msg [{}]",err)
-                //         };   
-
-                //     } else {
-                //         // ACK to client whether node is marked evicted
-                //         // register for notification of persist completion.
-                //         query_client.0
-                //             .entry(query_msg.0.clone())
-                //             .and_modify(|e| e.push_back(query_msg.1.clone()))
-                //             .or_insert_with(||{ let mut d = VecDeque::new(); d.push_back(query_msg.1.clone()); d});
-                            
-                //         if let Some(client_chs) = query_client.0.get(&query_msg.0) {
-                //             println!("{} PERSIST : client query vecdeque len {} {:?}",query_msg.2, client_chs.len(), query_msg.0);  
-                //         }
-                //         // send ACK (true) to client 
-                //         //println!("{} PERSIST : send ACK (true) to client {:?}",query_msg.2 , query_msg.0);
-                //         if let Err(err) = query_msg.1.send(true).await {
-                //             panic!("Error in sending query_msg [{}]",err)
-                //         };     
-                //         //println!("{} PERSIST :  client_query exit {:?}", query_msg.2 , query_msg.0);
-                //     }
-                // },
-
                 _ = shutdown_rx.recv() => {
                         println!("PERSIST shutdown:  Waiting for remaining persist tasks [{}] pending_q {} to complete...",tasks as usize, pending_q.0.len());
                         while tasks > 0 || pending_q.0.len() > 0 {
