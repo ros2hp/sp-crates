@@ -75,11 +75,11 @@ pub struct Cache<K,V>(Arc<Mutex<InnerCache<K,V>>>);
 
 
 impl<K,V> Cache<K,V>
-where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + std::marker::Sync + Send + 'static, 
-      V: Clone + std::fmt::Debug + std::marker::Sync + Send +  'static
+where K: Clone + Debug + Eq + Hash + Sync + Send + 'static, 
+      V: Clone + Debug + Sync + Send +  'static
 {
 
-    pub async fn new<D: Clone + std::marker::Sync + Send + 'static >(
+    pub async fn new<D: Clone + Sync + Send + 'static >(
         max_sp_tasks : usize
         ,waits : event_stats::Waits
         ,evict_tries: usize
@@ -240,7 +240,7 @@ impl<K : Hash + Eq + Debug + Clone, V : Clone + Debug >  InnerCache<K,V>
         //self.persisting.insert(key);
     }
 
-    async fn unset_persisting(&mut self, key: &K) {
+    fn unset_persisting(&mut self, key: &K) {
         //self.persisting.remove(key);
         if let Some((s,_)) = self.persisting.remove(key) {
             if let Err(e) = s.send(1) {
@@ -271,8 +271,8 @@ impl<K: Hash + Eq + Clone + Debug,  V:  Clone + NewValue<K,V> + Debug>  Cache<K,
     pub async fn unlock(&self, key: &K) {
         println!("CACHE: release  {:?}",key);
         let mut cache_guard = self.0.lock().await;
-        cache_guard.unset_loading(key); // now can be read by other 
-        cache_guard.unset_inuse(key);  // can now be persisted
+        cache_guard.unset_loading(key); 
+        cache_guard.unset_inuse(key);  
     }
 
     pub async fn get(
@@ -313,7 +313,7 @@ impl<K: Hash + Eq + Clone + Debug,  V:  Clone + NewValue<K,V> + Debug>  Cache<K,
                 // =======================
                 if persisting {
                     before =Instant::now(); 
-                    broadcast_ch_rcv.unwrap().recv().await.unwrap();
+                    broadcast_ch_rcv.unwrap().recv().await;
                     waits.record(event_stats::Event::GetNotInCachePersistWait,Instant::now().duration_since(before)).await;    
                 }
                 // ==================================================================
@@ -353,7 +353,7 @@ impl<K: Hash + Eq + Clone + Debug,  V:  Clone + NewValue<K,V> + Debug>  Cache<K,
                 // ======================
                 if loading {
                     before = Instant::now();
-                    broadcast_ch_rcv.unwrap().recv().await.unwrap();
+                    broadcast_ch_rcv.unwrap().recv().await;
                     waits.record(event_stats::Event::GetInCacheLoadWait,Instant::now().duration_since(before)).await;
                 }
 

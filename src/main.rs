@@ -1130,6 +1130,7 @@ async fn fetch_p_edge_meta<'a, T: Into<String>>(
                 );
     }
 
+
     let ovb_pk: Vec<Uuid> = di.nd.expect("nd is None").drain(ovb_start_idx..).collect(); //TODO:consider split_off + mem::swap
                                                                                          // let mut ovb_pk: Vec<Uuid> = di.nd.as_mut().expect("nd is None").split_off(ovb_start_idx);
                                                                                          // mem::swap(&mut ovb_pk,  &mut di.nd.unwrap());

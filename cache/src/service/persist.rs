@@ -153,7 +153,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + Sync + 'static,
 
                     println!("{} PERSIST : completed msg:  key {:?} tasks {}, pending_q {}", task, persist_key, tasks,pending_q.0.len());
                     persisting_lookup.0.remove(&persist_key);
-                    cache.0.lock().await.unset_persisting(&persist_key).await;
+                    cache.0.lock().await.unset_persisting(&persist_key);
 
                     // send ack to waiting client 
                     if let Some(client_chs) = query_client.0.get_mut(&persist_key) {
