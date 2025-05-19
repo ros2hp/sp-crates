@@ -150,6 +150,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
             let mut lru_entry = lru_tail_entry.clone();
             let mut prev_lru_entry :Arc<Mutex<Entry<K>>> = lru_entry.clone();
 
+
             while self.cnt >= self.capacity && lc < evict_tries  {
                 let before =Instant::now();         
                 {
@@ -458,16 +459,16 @@ pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug +
                             LruAction::Attach => {
                                 println!("{} LRU delay {:?} LRU: action Attach {:?}",task, Instant::now().duration_since(sent_time).as_nanos(), key);
                                 lru.attach( task, key, evict_tries, cache.clone()).await;
-                                // send response back to client...sync'd.
-                                if let Err(err) = client_ch.send(true).await {
-                                    panic!("LRU action send to client_ch {} ",err);
-                                };
                             }
                             LruAction::MoveToHead => {
                                 println!("{} LRU delay {:?} LRU: action move_to_head {:?}",task, Instant::now().duration_since(sent_time).as_nanos(),  key);
                                 lru.move_to_head( task, key).await;
                             }
                         }
+                        // send response back to client...sync'd.
+                      if let Err(err) = client_ch.send(true).await {
+                          panic!("LRU action send to client_ch {} ",err);
+                      };
                     }
 
                 Some(client_ch) = lru_flush_rx.recv() => {
