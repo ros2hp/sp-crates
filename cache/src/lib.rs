@@ -362,7 +362,7 @@ impl<K: Hash + Eq + Clone + Debug,  V:  Clone + NewValue<K,V> + Debug>  Cache<K,
                 };
                 
                 // wait for loading complete broadcast msg
-                let _ = srv_resp_rx.recv().await;
+                //let _ = srv_resp_rx.recv().await;
                 waits.record(event_stats::Event::GetInCacheMoveToHeadResp,Instant::now().duration_since(start_time)).await; 
 
                 waits.record(event_stats::Event::GetInCache,Instant::now().duration_since(start_time)).await; 
