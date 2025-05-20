@@ -191,7 +191,7 @@ impl<K : Hash + Eq + Debug + Clone, V : Clone + Debug >  InnerCache<K,V>
     // }
 
     fn set_inuse(&mut self, key: K, task : usize) {
-        println!("{}  set_inuse [{:?}]",task, key);
+        //println!("{}  set_inuse [{:?}]",task, key);
         self.inuse.entry(key.clone()).and_modify(|i|*i+=1).or_insert(1);
     }
 
@@ -201,10 +201,8 @@ impl<K : Hash + Eq + Debug + Clone, V : Clone + Debug >  InnerCache<K,V>
         if let Some(i) = self.inuse.get(key) {
             if *i == 0 {
                 self.inuse.remove(key);
-                println!("{} InnerCache unset_inuse REMOVED[{:?}]",task, key);
-            } else {
-                println!("{} InnerCache unset_inuse [{:?}] value {}",task, key, *i);
-            }
+                //println!("{} InnerCache unset_inuse REMOVED[{:?}]",task, key);
+            } 
         }
     }
 
@@ -212,11 +210,11 @@ impl<K : Hash + Eq + Debug + Clone, V : Clone + Debug >  InnerCache<K,V>
         //println!("InnerCache inuse [{:?}]",key);
         match self.inuse.get(key) {
             None => {
-                    println!("{} InnerCache inuse [{:?}] false ",task, key);
-                     false
+                    //println!("{} InnerCache inuse [{:?}] false ",task, key);
+                    false
                     },
             Some(i) => {
-                            println!("{} InnerCache inuse [{:?}] true value {} ",task, key,*i);
+                            //println!("{} InnerCache inuse [{:?}] true value {} ",task, key,*i);
                             true
                             },
         }
@@ -371,7 +369,7 @@ impl<K: Hash + Eq + Clone + Debug,  V:  Clone + NewValue<K,V> + Debug>  Cache<K,
                 if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::MoveToHead)).await {
                     panic!("Send on lru_move_to_head_ch failed {}",err)
                 };               
-                // keep in_use alive until LRU Service completes - prevents race condition on LRU's lookup 
+                // sync'd - keep in_use alive until LRU Service completes - prevents race condition on LRU's lookup 
                 let _ = srv_resp_rx.recv().await;
                 waits.record(event_stats::Event::GetInCacheLRUWait,Instant::now().duration_since(before)).await;
      
