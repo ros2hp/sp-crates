@@ -169,7 +169,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                         prev_lru_entry = lru_entry.clone();
                     }
                     let evict_entry = lru_entry.lock().await;
-                    //println!("{} LRU: attach evict processing: try to evict key {:?} lc {}",task, evict_entry.key,lc);
+                    println!("{} LRU: attach evict processing: try to evict key {:?} lc {}",task, evict_entry.key,lc);
                     // ================================
                     // Lock cache
                     // ================================
@@ -190,7 +190,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                             // ============================
                             // check state of entry in cache
                             // ============================
-                            if cache_guard.inuse(&evict_entry.key) {
+                            if cache_guard.inuse(&evict_entry.key, task) {
                                 println!("{} LRU attach evict -  cannot evict node as inuse set - abort eviction {:?} after tries {}", task, evict_entry.key, lc );
                                 //sleep(Duration::from_millis(10)).await;
                                 drop(evict_node_guard);
@@ -457,23 +457,23 @@ pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug +
  
                         match action {
                             LruAction::Attach => {
-                                println!("{} LRU delay {:?} LRU: action Attach {:?}",task, Instant::now().duration_since(sent_time).as_nanos(), key);
+                                //println!("{} LRU delay {:?} LRU: action Attach {:?}",task, Instant::now().duration_since(sent_time).as_nanos(), key);
                                 lru.attach( task, key, evict_tries, cache.clone()).await;
+                                                        // send response back to client...sync'd.
+                        if let Err(err) = client_ch.send(true).await {
+                            panic!("LRU action send to client_ch {} ",err);
+                          };
                             }
                             LruAction::MoveToHead => {
-                                println!("{} LRU delay {:?} LRU: action move_to_head {:?}",task, Instant::now().duration_since(sent_time).as_nanos(),  key);
+                                //println!("{} LRU delay {:?} LRU: action move_to_head {:?}",task, Instant::now().duration_since(sent_time).as_nanos(),  key);
                                 lru.move_to_head( task, key).await;
                             }
                         }
-                        // send response back to client...sync'd.
-                      if let Err(err) = client_ch.send(true).await {
-                          panic!("LRU action send to client_ch {} ",err);
-                      };
+
                     }
 
                 Some(client_ch) = lru_flush_rx.recv() => {
                                
-
                             println!("LRU service - flush lru ");
                                     let mut entry = lru.head;
                                     let cache_guard = cache.0.lock().await;

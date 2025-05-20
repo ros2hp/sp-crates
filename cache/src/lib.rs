@@ -190,26 +190,34 @@ impl<K : Hash + Eq + Debug + Clone, V : Clone + Debug >  InnerCache<K,V>
     //     self.unset_inuse(key);
     // }
 
-    fn set_inuse(&mut self, key: K) {
-        //println!("InnerCache set_inuse [{:?}]",key);
+    fn set_inuse(&mut self, key: K, task : usize) {
+        println!("{}  set_inuse [{:?}]",task, key);
         self.inuse.entry(key.clone()).and_modify(|i|*i+=1).or_insert(1);
     }
 
-    fn unset_inuse(&mut self, key: &K) {
-        //println!("InnerCache unset_inuse [{:?}]",key);
+    fn unset_inuse(&mut self, key: &K, task: usize) {
+        
         self.inuse.entry(key.clone()).and_modify(|i|*i-=1);
+        if let Some(i) = self.inuse.get(key) {
+            if *i == 0 {
+                self.inuse.remove(key);
+                println!("{} InnerCache unset_inuse REMOVED[{:?}]",task, key);
+            } else {
+                println!("{} InnerCache unset_inuse [{:?}] value {}",task, key, *i);
+            }
+        }
     }
 
-    fn inuse(&self, key: &K) -> bool {
+    fn inuse(&self, key: &K, task: usize) -> bool {
         //println!("InnerCache inuse [{:?}]",key);
         match self.inuse.get(key) {
             None => {
-                    //println!("InnerCache inuse [{:?}] false ",key);
+                    println!("{} InnerCache inuse [{:?}] false ",task, key);
                      false
                     },
             Some(i) => {
-                            //println!("InnerCache inuse [{:?}] value {}) ",key,*i);
-                            *i > 0
+                            println!("{} InnerCache inuse [{:?}] true value {} ",task, key,*i);
+                            true
                             },
         }
     }
@@ -268,11 +276,11 @@ impl<K : Hash + Eq + Debug + Clone, V : Clone + Debug >  InnerCache<K,V>
 impl<K: Hash + Eq + Clone + Debug,  V:  Clone + NewValue<K,V> + Debug>  Cache<K,V>
 {
     // 
-    pub async fn unlock(&self, key: &K) {
-        println!("CACHE: release  {:?}",key);
+    pub async fn unlock(&self, key: &K, task: usize) {
+        println!("CACHE: unset loading, inuse  {:?}",key);
         let mut cache_guard = self.0.lock().await;
         cache_guard.unset_loading(key); 
-        cache_guard.unset_inuse(key);  
+        cache_guard.unset_inuse(key, task);  
     }
 
     pub async fn get(
@@ -301,7 +309,8 @@ impl<K: Hash + Eq + Clone + Debug,  V:  Clone + NewValue<K,V> + Debug>  Cache<K,
                 // add to cache, set in-use 
                 // =========================
                 cache_guard.data.insert(key.clone(), arc_value.clone()); 
-                cache_guard.set_inuse(key.clone());
+                let arc_value_guard=arc_value.lock().await;
+                cache_guard.set_inuse(key.clone(),task);
                 let (persisting, broadcast_ch_rcv)  = cache_guard.persisting(&key);
                 cache_guard.set_loading(key.clone());
                 // ============================================================================================================
@@ -316,14 +325,13 @@ impl<K: Hash + Eq + Clone + Debug,  V:  Clone + NewValue<K,V> + Debug>  Cache<K,
                     broadcast_ch_rcv.unwrap().recv().await;
                     waits.record(event_stats::Event::GetNotInCachePersistWait,Instant::now().duration_since(before)).await;    
                 }
-                // ==================================================================
-                // Send Attach to LRU - will set_persistence, set_inuse for evict key 
-                // ==================================================================
+                // ==========================
+                // Send Attach to LRU Service 
+                // ==========================
                 if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::Attach)).await {
                     panic!("Send on lru_attach_ch errored: {}", err);
-                }   
-                // waits.record(event_stats::Event::ChanLRUAttachSend,Instant::now().duration_since(before)).await;    
-                // sync'd: wait for LRU operation to complete - just like using a mutex is synchronous with operation.
+                }      
+                // sync'd: wait for LRU operation to complete 
                 let _ = srv_resp_rx.recv().await;
 
                 waits.record(event_stats::Event::GetNotInCache,Instant::now().duration_since(start_time)).await; 
@@ -339,7 +347,7 @@ impl<K: Hash + Eq + Clone + Debug,  V:  Clone + NewValue<K,V> + Debug>  Cache<K,
                 waits.record(event_stats::Event::GetNotInCacheGet,Instant::now().duration_since(before)).await; 
                 let arc_value=arc_value.clone();
                 let lru_ch=cache_guard.lru_ch.clone();
-                cache_guard.set_inuse(key.clone()); // prevents concurrent persist
+                cache_guard.set_inuse(key.clone(),task); // prevents concurrent persist
                 let (loading,broadcast_ch_rcv) = cache_guard.loading(&key);
                 // =========================
                 // release cache lock
@@ -356,15 +364,17 @@ impl<K: Hash + Eq + Clone + Debug,  V:  Clone + NewValue<K,V> + Debug>  Cache<K,
                     broadcast_ch_rcv.unwrap().recv().await;
                     waits.record(event_stats::Event::GetInCacheLoadWait,Instant::now().duration_since(before)).await;
                 }
-
+                // ============================================================
+                // Msg move-to-head to LRU Service - client requests serialised
+                // ============================================================
+                before = Instant::now();
                 if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::MoveToHead)).await {
                     panic!("Send on lru_move_to_head_ch failed {}",err)
-                };
-                
-                // wait for loading complete broadcast msg
+                };               
+                // keep in_use alive until LRU Service completes - prevents race condition on LRU's lookup 
                 let _ = srv_resp_rx.recv().await;
-                waits.record(event_stats::Event::GetInCacheMoveToHeadResp,Instant::now().duration_since(start_time)).await; 
-
+                waits.record(event_stats::Event::GetInCacheLRUWait,Instant::now().duration_since(before)).await;
+     
                 waits.record(event_stats::Event::GetInCache,Instant::now().duration_since(start_time)).await; 
                 
                 return CacheValue::Existing(arc_value.clone());
