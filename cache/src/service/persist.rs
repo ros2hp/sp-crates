@@ -73,7 +73,6 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + Sync + 'static,
     //let mut persisted = Persisted::new(); // temmporary - initialise to zero ovb metadata when first persisted
     let mut persisting_lookup: Lookup<K, V> = Lookup::new();
     let mut pending_q: PendingQ<K> = PendingQ::new();
-    let mut query_client: QueryClient<K> = QueryClient::new();
     let mut tasks = 0;
 
     // persist completed channel - persisting task sends message to Persist Service when it completes 
@@ -153,22 +152,6 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + Sync + 'static,
                     println!("{} PERSIST : completed msg:  key {:?} tasks {}, pending_q {}", task, persist_key, tasks,pending_q.0.len());
                     persisting_lookup.0.remove(&persist_key);
                     cache.0.lock().await.unset_persisting(&persist_key);
-
-                    // send ack to waiting client 
-                    if let Some(client_chs) = query_client.0.get_mut(&persist_key) {
-                        // send ack of completed persist to waiting client
-                        loop {
-                            if let Some(v) = client_chs.pop_front() {
-                                if let Err(err) = v.send(true).await {
-                                    panic!("Error in sending to waiting client that K is evicited [{}]",err)
-                                }
-                            } else {
-                                break
-                            }
-                        }
-                        //
-                        query_client.0.remove(&persist_key);
-                    }
                     // // process next node in persist Pending Queue
                     if let Some(queued_key) = pending_q.0.pop_back() {
                         //println!("{} PERSIST : persist next entry in pending_q.... {:?}", task, queued_key);
@@ -210,17 +193,6 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + Sync + 'static,
                             if tasks > 0 {
                                 let Some(persist_key) = persist_completed_rx.recv().await else {panic!("Inconsistency; expected task complete msg got None...")};
                                 tasks-=1;
-                                // send to client if one is waiting on query channel. Does not block as buffer size is 1.
-                                if let Some(client_chs) = query_client.0.get(&persist_key.0) {
-                                    // send ack of completed persistion to waiting client
-                                    for v in client_chs {
-                                        if let Err(err) = v.send(true).await {
-                                            panic!("Error in sending to waiting client that K is evicited [{}]",err)
-                                        }
-                                    }
-                                    //
-                                    query_client.0.remove(&persist_key.0);
-                                }
                             }
                             if let Some(queued_key) = pending_q.0.pop_back() {
   
