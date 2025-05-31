@@ -102,10 +102,7 @@ pub fn start_event_service(mut stats_rx : tokio::sync::mpsc::Receiver<(Event, Du
                 Some((e, rec_dur, dur)) = stats_rx.recv() => {
 
                     println!("STATS: stats_rx {:?} {:?} {}",e, rec_dur, dur.as_nanos());
-                    match waits_repo.get_mut(&e) {
-                        Some(vec) => { vec.push((rec_dur, dur)); }
-                        None => { waits_repo.insert(e,  vec!((rec_dur, dur))); }
-                    }
+                    waits_repo.entry(e).and_modify(|vec|vec.push((rec_dur,dur))).or_insert(vec!((rec_dur, dur)));
                 }
 
                 _ = shutdown_rx.recv() => {

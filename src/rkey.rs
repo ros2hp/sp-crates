@@ -49,7 +49,7 @@ impl RKey {
             }
         }
         // release resources held by key 
-        cache.unlock(self, task).await;
+        cache.unlock(self,task).await;
 
     }
 }

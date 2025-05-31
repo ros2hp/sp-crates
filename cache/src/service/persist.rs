@@ -109,7 +109,6 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + Sync + 'static,
                             // maintain a FIFO of evicted nodes
                             println!("{} PERSIST: submit - max tasks reached add {:?} pending_q {}",task , key, pending_q.0.len());
                             pending_q.0.push_front(key.clone());                         
-    
                         } else {
 		                    // =================================================
                             // lock arc value to access type parameter V [RNode]

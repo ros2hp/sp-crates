@@ -11,7 +11,7 @@ use crate::service::lru;
 
 use tokio::time::{Instant,sleep,Duration};
 use tokio::sync::Mutex;
-use tokio::sync::mpsc;
+//use tokio::sync::mpsc;
 use tokio::sync::broadcast;
 
 pub enum CacheValue<V> {
@@ -243,11 +243,9 @@ impl<K : Hash + Eq + Debug + Clone, V : Clone + Debug >  InnerCache<K,V>
     fn set_persisting(&mut self, key: K) {
         let (sndr,rcv) = broadcast::channel::<u8>(1);
         self.persisting.insert(key,(sndr,rcv));
-        //self.persisting.insert(key);
     }
 
     fn unset_persisting(&mut self, key: &K) {
-        //self.persisting.remove(key);
         if let Some((s,_)) = self.persisting.remove(key) {
             if let Err(e) = s.send(1) {
                 panic!("Cache: unset_loading - send error on broadcast channel [{}]",e);
@@ -329,7 +327,7 @@ impl<K: Hash + Eq + Clone + Debug,  V:  Clone + NewValue<K,V> + Debug>  Cache<K,
                 if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::Attach)).await {
                     panic!("Send on lru_attach_ch errored: {}", err);
                 }      
-                // sync'd: wait for LRU operation to complete 
+                // sync'd: LRU requires inuse to be active, so wait for it to complete 
                 let _ = srv_resp_rx.recv().await;
 
                 waits.record(event_stats::Event::GetNotInCache,Instant::now().duration_since(start_time)).await; 
@@ -365,11 +363,12 @@ impl<K: Hash + Eq + Clone + Debug,  V:  Clone + NewValue<K,V> + Debug>  Cache<K,
                 // ============================================================
                 // Msg move-to-head to LRU Service - client requests serialised
                 // ============================================================
-                before = Instant::now();
                 if let Err(err) = lru_ch.send((task, key.clone(), Instant::now(), lru_client_ch, lru::LruAction::MoveToHead)).await {
                     panic!("Send on lru_move_to_head_ch failed {}",err)
-                };               
-                // sync'd - keep in_use alive until LRU Service completes - prevents race condition on LRU's lookup 
+                };    
+                before = Instant::now();           
+                // sync'd - keep inuse alive (prevents eviction) until LRU Service completes.
+                // prevents race condition on LRU's lookup 
                 let _ = srv_resp_rx.recv().await;
                 waits.record(event_stats::Event::GetInCacheLRUWait,Instant::now().duration_since(before)).await;
      

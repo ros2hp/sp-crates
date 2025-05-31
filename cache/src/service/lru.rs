@@ -427,7 +427,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
 }
 
 
-pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker::Send + std::marker::Sync + 'static, V: std::marker::Send + std::marker::Sync + Clone + std::fmt::Debug + 'static>
+pub(crate) fn start_service<K: Eq + Hash + Debug + Clone + Send + Sync + 'static, V: Send + Sync + Clone + Debug + 'static>
 (        lru_capacity : usize
         ,cache: Cache<K,V>
         //
@@ -459,16 +459,17 @@ pub(crate) fn start_service<K:std::cmp::Eq + std::hash::Hash + std::fmt::Debug +
                             LruAction::Attach => {
                                 //println!("{} LRU delay {:?} LRU: action Attach {:?}",task, Instant::now().duration_since(sent_time).as_nanos(), key);
                                 lru.attach( task, key, evict_tries, cache.clone()).await;
-                                                        // send response back to client...sync'd.
-                        if let Err(err) = client_ch.send(true).await {
-                            panic!("LRU action send to client_ch {} ",err);
-                          };
+
                             }
                             LruAction::MoveToHead => {
                                 //println!("{} LRU delay {:?} LRU: action move_to_head {:?}",task, Instant::now().duration_since(sent_time).as_nanos(),  key);
                                 lru.move_to_head( task, key).await;
                             }
                         }
+                        // send response back to client...sync'd.
+                        if let Err(err) = client_ch.send(true).await {
+                            panic!("LRU action send to client_ch {} ",err);
+                        };
 
                     }
 
