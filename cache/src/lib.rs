@@ -55,7 +55,6 @@ pub trait NewValue<K: Clone,V> {
 struct InnerCache<K,V> {
     data : HashMap<K, Arc<tokio::sync::Mutex<V>>>,
     // channels
-    persist_query_ch : tokio::sync::mpsc::Sender<QueryMsg<K>>,
     persist_shutdown_ch : tokio::sync::mpsc::Sender<u8>,
     lru_ch : tokio::sync::mpsc::Sender<(usize, K, Instant, tokio::sync::mpsc::Sender<bool>, lru::LruAction)>,
     lru_flush_ch : tokio::sync::mpsc::Sender<tokio::sync::mpsc::Sender<()>>,
@@ -90,13 +89,11 @@ where K: Clone + Debug + Eq + Hash + Sync + Send + 'static,
     where V: Persistence<K,D>
    { 
         let (lru_ch, lru_operation_rx) = tokio::sync::mpsc::channel::<(usize, K, Instant,tokio::sync::mpsc::Sender<bool>, lru::LruAction)>(max_sp_tasks+1);
-        let (persist_query_ch, persist_query_rx) = tokio::sync::mpsc::channel::<QueryMsg<K>>(max_sp_tasks * 2); 
         let (lru_flush_ch, lru_flush_rx) = tokio::sync::mpsc::channel::<tokio::sync::mpsc::Sender<()>>(1);
         let (persist_shutdown_ch, persist_shutdown_rx) = tokio::sync::mpsc::channel::<u8>(1);
   
         let cache = Cache::<K,V>(Arc::new(tokio::sync::Mutex::new(InnerCache::<K,V>{
                 data: HashMap::new()
-                ,persist_query_ch
                 ,lru_ch
                 //,evicted : HashSet::new()
                 ,inuse : HashMap::new()
@@ -132,7 +129,6 @@ where K: Clone + Debug + Eq + Hash + Sync + Send + 'static,
             cache.clone(),
             db,
             persist_submit_rx,
-            persist_query_rx,
             persist_shutdown_rx,
             waits.clone(),
             persist_tasks,
@@ -299,7 +295,6 @@ impl<K: Hash + Eq + Clone + Debug,  V:  Clone + NewValue<K,V> + Debug>  Cache<K,
                 println!("{} CACHE: get -  Not Cached: add to cache {:?}", task, key);
                 waits.record(event_stats::Event::GetInCacheGet,Instant::now().duration_since(before)).await; 
                 let lru_ch = cache_guard.lru_ch.clone();
-                let persist_query_ch = cache_guard.persist_query_ch.clone();
                 let arc_value = V::new_with_key(key);
                 // =========================
                 // add to cache, set in-use 

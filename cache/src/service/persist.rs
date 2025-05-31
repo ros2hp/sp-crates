@@ -57,7 +57,6 @@ pub(crate) fn start_service<K,V,D>(
     db : D,
     // channels
     mut submit_rx: tokio::sync::mpsc::Receiver<(usize, K, Arc<Mutex<V>>, tokio::time::Instant)>,
-    mut client_query_rx: tokio::sync::mpsc::Receiver<QueryMsg<K>>,
     mut shutdown_rx: tokio::sync::mpsc::Receiver<u8>,
     //
     waits_ : Waits,
