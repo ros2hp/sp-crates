@@ -217,6 +217,7 @@ impl NewValue<RKey, RNode> for RNode {
 }
 
 impl Persistence<RKey, Dynamo> for RNode {
+    
     async fn persist(
         &mut self,
         task: usize,

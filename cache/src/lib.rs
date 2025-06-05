@@ -9,9 +9,8 @@ use std::collections::HashMap;
 
 use crate::service::lru;
 
-use tokio::time::{Instant,sleep,Duration};
+use tokio::time::{Instant};
 use tokio::sync::Mutex;
-//use tokio::sync::mpsc;
 use tokio::sync::broadcast;
 
 pub enum CacheValue<V> {
@@ -29,16 +28,6 @@ pub trait Persistence_<K, D>
         ,waits : event_stats::Waits
     );
 }
-
-// Message sent on Evict Queued Channel
-pub struct QueryMsg<K>(pub K, pub tokio::sync::mpsc::Sender<bool>, pub usize);
-
-impl<K> QueryMsg<K>{
-    fn new(rkey: K, resp_ch: tokio::sync::mpsc::Sender<bool>, task: usize) -> Self {
-        QueryMsg(rkey, resp_ch, task)
-    }
-}
-
 pub trait NewValue<K: Clone,V> {
 
     fn new_with_key(key : &K) -> Arc<tokio::sync::Mutex<V>>;
@@ -71,7 +60,6 @@ struct InnerCache<K,V> {
 
 #[derive(Debug, Clone)]
 pub struct Cache<K,V>(Arc<Mutex<InnerCache<K,V>>>);
-
 
 impl<K,V> Cache<K,V>
 where K: Clone + Debug + Eq + Hash + Sync + Send + 'static, 

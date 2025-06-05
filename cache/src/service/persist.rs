@@ -3,8 +3,6 @@ use crate::Persistence;
 
 use event_stats::Waits;
 
-use crate::QueryMsg;
-
 use std::collections::{HashMap,  VecDeque};
 use std::sync::Arc;
 
@@ -190,7 +188,7 @@ where K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + Sync + 'static,
                         while tasks > 0 || pending_q.0.len() > 0 {
                             println!("  PERSIST : shutdown wait for completed msg:  tasks {}, pending_q {}", tasks,pending_q.0.len());
                             if tasks > 0 {
-                                let Some(persist_key) = persist_completed_rx.recv().await else {panic!("Inconsistency; expected task complete msg got None...")};
+                                let Some(_persist_key) = persist_completed_rx.recv().await else {panic!("Inconsistency; expected task complete msg got None...")};
                                 tasks-=1;
                             }
                             if let Some(queued_key) = pending_q.0.pop_back() {
