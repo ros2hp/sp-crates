@@ -178,6 +178,10 @@ where K: Eq + Hash + Debug + Clone
     }
 }
 
+//      head      tail
+//       n -> n1 -> n2 ->  (next)
+//    <- n <- n1 <- n2     (prev)
+
 impl<K,V> LRU<K,V> 
 where K: Eq + Hash + Debug + Clone + Send, V:  Clone + Debug
 {    
@@ -346,9 +350,6 @@ where K: Eq + Hash + Debug + Clone + Send, V:  Clone + Debug
                 }
             
             Some(mut e) => {
-                // head      tail
-                //  n -> n1 -> n2 (next)
-                //  n <- n1 <- n2 (prev)
                 // set old head prev to point to new entry
                 e.prev = Some(box_new_entry.clone());
                 // set new entry next to point to old head entry & prev to NOne   
@@ -443,6 +444,10 @@ where K: Eq + Hash + Debug + Clone + Send, V:  Clone + Debug
                     self.tail = Some(lru_entry.prev.as_ref().unwrap().clone());
                     
                 } else {
+
+                    if let None = lru_entry.prev {
+                       panic!("{} LRU INCONSISTENCY - LRU move_to_head : prev should not by None {:?} ",task,key ); 
+                    }
                     
                     let mut prev = lru_entry.prev.as_ref().unwrap().clone();//.lock().await;
                     let mut next = lru_entry.next.as_ref().unwrap().clone();//.lock().await;
