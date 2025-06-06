@@ -403,11 +403,11 @@ where K: Eq + Hash + Debug + Clone + Send, V:  Clone + Debug
             //println!("--------------");
             println!("{} LRU move_to_head {:?} ********",task, key);
             // abort if lru_entry is at head of lru
-            match self.head {
+            match self.head.clone() {
                 None => {
                     panic!("{} LRU empty - expected entries",task);
                 }
-                Some(ref v) => {
+                Some(v) => {
                     let hd: K = v.key.clone();
                     if hd == key {
                         // k already at head
@@ -430,27 +430,25 @@ where K: Eq + Hash + Debug + Clone + Send, V:  Clone + Debug
                     ////println!("LRU INCONSISTENCY move_to_head: expected entry to have prev but got NONE {:?}",k);
                     if let None = lru_entry.next {
                         // should not happend
-                        //panic!("{} LRU move_to_head : got a entry with no prev or next set (ie. a new node) - some synchronisation gone astray",task)
-                        println!("{} LRU only entry in list, nothing to do - move_to_head complete...{:?}",task, key);
-                        return
-                    }
+                        println!("{} LRU move_to_head : got a entry with no prev or next set (ie. a new node) - some synchronisation gone astray",task);
+                        panic!("{} LRU move_to_head : got a entry with no prev or next set (ie. a new node) - some synchronisation gone astray",task)
+                     }
                 }
 
                 // check if moving tail entry
                 if let None = lru_entry.next {
                 
                     println!("{} LRU move_to_head detach tail entry {:?}",task, key);
-                    //let mut prev_guard = lru_entry.prev.as_ref().unwrap().lock().await;
                     lru_entry.next = None;
                     self.tail = Some(lru_entry.prev.as_ref().unwrap().clone());
                     
                 } else {
                     
-                    let mut prev_guard = lru_entry.prev.as_ref().unwrap().clone();//.lock().await;
-                    let mut next_guard = lru_entry.next.as_ref().unwrap().clone();//.lock().await;
+                    let mut prev = lru_entry.prev.as_ref().unwrap().clone();//.lock().await;
+                    let mut next = lru_entry.next.as_ref().unwrap().clone();//.lock().await;
 
-                    prev_guard.next = Some(lru_entry.next.as_ref().unwrap().clone());
-                    next_guard.prev = Some(lru_entry.prev.as_ref().unwrap().clone());
+                    prev.next = Some(lru_entry.next.as_ref().unwrap().clone());
+                    next.prev = Some(lru_entry.prev.as_ref().unwrap().clone());
         
                 }
                 println!("{} LRU move_to_head Detach complete...{:?}",task, key);
