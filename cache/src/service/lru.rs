@@ -184,7 +184,6 @@ where K: Eq + Hash + Debug + Clone + Send, V:  Clone + Debug
 
 
     // prerequisite - lru_entry has been confirmed NOT to be in lru-cache.
-    // note: can only execute methods on LRU if lock has been acquired via Box<LRU>>
     async fn attach(
         &mut self, // , cache_guard:  &mut tokio::sync::MutexGuard<'_, Cache::<K,V>>
         task : usize,
@@ -204,7 +203,7 @@ where K: Eq + Hash + Debug + Clone + Send, V:  Clone + Debug
             let mut lc = 0;  
             let mut lru_tail_entry = self.tail.as_ref().unwrap().clone();
             let mut lru_entry = lru_tail_entry.clone();
-            let mut prev_lru_entry : Box<Entry<K>> = lru_entry.clone();
+            let mut prev_lru_entry  = lru_entry.clone();
 
 
             while self.cnt >= self.capacity && lc < evict_tries  {
@@ -221,7 +220,7 @@ where K: Eq + Hash + Debug + Clone + Send, V:  Clone + Debug
                         // try next in linked list 
                         let prev_lru_entry_=prev_lru_entry.clone();
                         //let lru_entry_guard= prev_lru_entry_.lock().await;
-                        lru_entry = prev_lru_entry_.prev.as_ref().unwrap().clone();
+                        lru_entry = prev_lru_entry_.prev.unwrap().clone();
                         prev_lru_entry = lru_entry.clone();
                     }
                     let mut evict_entry = lru_entry.clone();
@@ -347,8 +346,9 @@ where K: Eq + Hash + Debug + Clone + Send, V:  Clone + Debug
                 }
             
             Some(mut e) => {
-                //let mut new_entry_guard: tokio::sync::MutexGuard<'_, Entry<K>> = box_new_entry.lock().await;
-                //let mut old_head = e.lock().await;
+                // head      tail
+                //  n -> n1 -> n2 (next)
+                //  n <- n1 <- n2 (prev)
                 // set old head prev to point to new entry
                 e.prev = Some(box_new_entry.clone());
                 // set new entry next to point to old head entry & prev to NOne   
@@ -425,15 +425,14 @@ where K: Eq + Hash + Debug + Clone + Send, V:  Clone + Debug
                 Some(v) => v.clone()
             };
             {
-                // DETACH the entry before attaching to LRU head
-                
-                //let lru_entry_guard = lru_entry.lock().await;
-                // NEW CODE to fix eviction and new request at same time on a Node
+                // check if lru_entry is only one in list
                 if let None = lru_entry.prev {
                     ////println!("LRU INCONSISTENCY move_to_head: expected entry to have prev but got NONE {:?}",k);
                     if let None = lru_entry.next {
                         // should not happend
-                        panic!("{} LRU move_to_head : got a entry with no prev or next set (ie. a new node) - some synchronisation gone astray",task)
+                        //panic!("{} LRU move_to_head : got a entry with no prev or next set (ie. a new node) - some synchronisation gone astray",task)
+                        println!("{} LRU only entry in list, nothing to do - move_to_head complete...{:?}",task, key);
+                        return
                     }
                 }
 
