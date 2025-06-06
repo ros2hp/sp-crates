@@ -410,6 +410,7 @@ where K: Eq + Hash + Debug + Clone + Send, V:  Clone + Debug
                 }
                 Some(v) => {
                     let hd: K = v.key.clone();
+                    println!("{} LRU move_to_head {:?} checking if head - head is {:?}", task, key, hd);
                     if hd == key {
                         // k already at head
                         println!("{} LRU move_to_head {:?} at head already", task, key);
