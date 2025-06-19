@@ -66,7 +66,7 @@ impl<'a,  K: Hash + Eq + Debug + Clone> Iterator for Iter<'a,K> {
                 self.next_k = v.next.as_ref();
                 Some(&v.key)
             }
-            None => panic!("expected a value in lookup got None")
+            None => panic!("iter: expected a value in lookup got None")
         }
     }
 }
@@ -634,7 +634,7 @@ pub(crate) fn start_service<K: Eq + Hash + Debug + Clone + Send + Sync + 'static
                     
                         for k in &lru {
 
-                            if lru.debug {
+                            if lru.log {
                                 println!("lru iterate key {:?}",k);
                             }
                             if let Some(arc_node) = cache_guard.data.get(k) {

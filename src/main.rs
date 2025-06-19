@@ -52,7 +52,7 @@ const _LDT: u8 = 5;
 // node with substantial scalar data this parameter should be corresponding small (< 5) to minimise the space consumed
 // within the parent block. The more space consumed by the embedded child node data the more RCUs required to read the parent RNode data,
 // which will be an overhead in circumstances where child data is not required.
-const EMBEDDED_CHILD_NODES: usize = 4;//50; //10; // prod value: 20
+const EMBEDDED_CHILD_NODES: usize = 40;//50; //10; // prod value: 20
 
 // MAX_OV_BLOCKS - max number of overflow blocks. Set to the desired number of concurrent reads on overflow blocks ie. the degree of parallelism required. Prod may have upto 100.
 // As each block resides in its own UUID (PKey) there shoud be little contention when reading them all in parallel. When max is reached the overflow
@@ -63,7 +63,7 @@ const MAX_OV_BLOCKS: usize = 5; // prod value : 100
 // OV_MAX_BATCH_SIZE - number of items to an overflow batch. Always fixed at this value.
 // The limit is checked using the database SIZE function during insert of the child data into the overflow block.
 // An overflow block has an unlimited number of batches.
-const OV_MAX_BATCH_SIZE: usize = 4;//160; //15; // Prod 100 to 500.
+const OV_MAX_BATCH_SIZE: usize = 160;//160; //15; // Prod 100 to 500.
 
 // OV_BATCH_THRESHOLD, initial number of batches in an overflow block before creating new Overflow block.
 // Once all overflow blocks have been created (MAX_OV_BLOCKS), blocks are randomly chosen and each block
