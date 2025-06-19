@@ -58,12 +58,15 @@ impl<'a,  K: Hash + Eq + Debug + Clone> Iterator for Iter<'a,K> {
 
     fn next(&mut self) -> Option<Self::Item> {
 
+        if let None = self.next_k {
+            return None
+        }
         match self.lookup.get(self.next_k.as_ref().unwrap()) {
             Some(v) => {
                 self.next_k = v.next.as_ref();
                 Some(&v.key)
             }
-            None => None
+            None => panic!("expected a value in lookup got None")
         }
     }
 }
@@ -77,9 +80,10 @@ impl<'a,  K: Hash + Eq + Debug + Clone> Iterator for Iter<'a,K> {
 struct LRU<K: Hash + Eq + Debug,V> {
     capacity: usize,
     cnt : usize,
-    //
+    // logging
     log : bool,
-    // pointer to Entry value in the LRU linked list for a K
+    debug : bool,
+    // store Entry values by K value
     lookup : HashMap<K,Entry<K>>,
     //
     persist_submit_ch: tokio::sync::mpsc::Sender<(usize, K, Arc<Mutex<V>>, Instant)>,
@@ -154,7 +158,10 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
         LRU{
             capacity: cap,
             cnt: 0,
-            log: false,
+            // logging
+            log: true,
+            debug: false,
+            // store Entry values
             lookup: HashMap::new(),
             // send channels for persist requests
             persist_submit_ch: persist_submit_ch,
@@ -234,7 +241,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                                  panic!("{} LRU attach evict {:?}, not in lookup",task,try_to_evict) }
                         Some(v) => v.clone()
                     };
-                    if self.log { 
+                    if self.debug { 
                         println!("{} LRU attach evict processing: try to evict key {:?} lc {}",task, evict_entry,lc);
                     }
                     // ================================
@@ -259,7 +266,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                             // ============================
                             if cache_guard.inuse(&evict_entry.key, task) {
 
-                                if self.log {
+                                if self.debug {
                                     println!("{} LRU attach evict -  cannot evict node as inuse set - abort eviction {:?} after tries {}", task, evict_entry.key, lc );
                                 }
                                 drop(evict_node_guard);
@@ -269,7 +276,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                                             panic!("{} LRU:   evict_entry.prev is NONE {:?}",task, evict_entry)}
                                     Some(ref prev) => prev.clone()
                                 };
-                                if self.log { 
+                                if self.debug { 
                                     let n = self.lookup.get(&try_to_evict).unwrap();
                                     println!("{} LRU attach NEW try evict node {:?}",task, n);
                                 }
@@ -293,7 +300,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                                         self.tail = Some(new_tail.clone());
                                     }
                                 }
-                                if self.log {
+                                if self.debug {
                                     println!("LRU attach new tail = {:?}",self.tail);
                                 }
                             } else {
@@ -312,14 +319,14 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                                         let prev = self.lookup.get_mut(prev_key).unwrap();
                                         prev.next = next_key.clone();
 
-                                        if self.log {
+                                        if self.debug {
                                             println!("{} LRU attach removed  evict_entry {:?} PREV {:?}",task, evict_entry, prev);
                                         }
 
                                         let next = self.lookup.get_mut(&next_key.unwrap()).unwrap();
                                         next.prev = Some(prev_key.clone());   
 
-                                        if self.log {
+                                        if self.debug {
                                             println!("{} LRU attach removed  evict_entry {:?}   NEXT  {:?} ",task, evict_entry, next);
                                         }
                                     }                          
@@ -329,7 +336,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                             // =====================
                             // remove from lru lookup 
                             // =====================
-                            if self.log {
+                            if self.debug {
                                 println!("{} LRU attach - evict_entry remove from list {:?}",task, evict_entry.key);
                             }
                             self.lookup.remove(&evict_entry.key);
@@ -341,7 +348,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                             // ===============================================================================
                             // notify persist service - need to set persistence before proceeding 
                             // ================================================================================
-                            if self.log {
+                            if self.debug {
                                 println!("{} LRU attach evict - notify persist service to persist {:?}",task, evict_entry.key);
                             }
                             if let Err(err) = self
@@ -368,7 +375,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                                         panic!("{} LRU:   evict_entry.prev is NONE {:?}",task, evict_entry)}
                                 Some(ref prev) => prev.clone()
                             };
-                            if self.log {
+                            if self.debug {
                                 let n = self.lookup.get(&try_to_evict).unwrap();
                                 println!("{} LRU attach NEW try evict node {:?}",task, n);
                             }
@@ -413,7 +420,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                 attach_entry.next = Some(hd_key.clone());
                 // set LRU head to point to new entry
                 self.head=Some(key.clone());
-                if self.log {
+                if self.debug {
                     println!("{} LRU attach : head set to {:?}", task, self.head);
                     println!("{} LRU attach : tail         {:?}", task, self.tail);
                 }
@@ -429,14 +436,16 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                 }
             }
         }
-        if let Some(_) = self.lookup.get(&key) {
-            println!("{} LRU INCONSISTENCY - attach entry exists in lookup {:?}",task, key);
-            panic!("LRU INCONSISTENCY - attach entry exists in lookup {:?}",key)
+        if self.debug {
+            if let Some(_) = self.lookup.get(&key) {
+                println!("{} LRU INCONSISTENCY - attach entry exists in lookup {:?}",task, key);
+                panic!("LRU INCONSISTENCY - attach entry exists in lookup {:?}",key)
+            }
         }
-
-        if self.log {
+        if self.debug {
             println!("{} LRU attach : insert  into lookup key  {:?}  \n self.head  {:?} \n attach_entry {:?}", task, key, self.head, attach_entry);
         }
+
         self.lookup.insert(key, attach_entry);
         
         if let None = self.head {
@@ -464,8 +473,9 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
         let start_time = Instant::now();
         {
         
-            println!("--------------");
-            println!("{} LRU move_to_head {:?} ******** head {:?}",task, key,self.head);
+            if self.log{
+                println!("{} LRU move_to_head {:?} ******** head {:?}",task, key,self.head);
+            }
             // abort if move_entry is at head of lru
             match self.head {
                 None => {
@@ -497,17 +507,18 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
             // check if moving tail entry
             match move_entry.next  {
                 None => {
-                    println!("{} LRU move_to_head detach tail entry {:?}",task, key);
+                    if self.debug {
+                        println!("{} LRU move_to_head detach tail entry {:?}",task, key);
+                    }
                     // set previous entry next value to None as its the new tail.
                     let prev_key = move_entry.prev.as_ref().unwrap();
                     self.lookup.get_mut(prev_key).unwrap().next=None;
                     self.tail = Some(prev_key.clone());   
 
                     let new_tail = self.lookup.get(self.tail.as_ref().unwrap()).unwrap();
-                    if self.log {
+                    if self.debug {
                         println!("{} LRU move_to_head new tail {:?}",task, new_tail);
                     }
-
                     } 
                 Some(_) => {
                     
@@ -517,25 +528,27 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
                         None => {panic!("LRU move_to_head - move_entry - expected prev got None")}
                         
                         Some(ref prev_key) => {
-                            println!("{} LRU move_to_head - remove move_entry {:?} prev {:?} next {:?}",task, move_entry.key, move_entry.prev, next_key);
+                            if self.debug {
+                                println!("{} LRU move_to_head - remove move_entry {:?} prev {:?} next {:?}",task, move_entry.key, move_entry.prev, next_key);
+                            }
                             let prev = self.lookup.get_mut(prev_key).unwrap();
                             prev.next = next_key.clone();
 
-                            if self.log {
+                            if self.debug {
                                 println!("{} LRU move_to_head removed  move_entry {:?} PREV {:?}",task, move_entry, prev);
                             }
 
                             let next = self.lookup.get_mut(&next_key.unwrap()).unwrap();
                             next.prev = Some(prev_key.clone());   
 
-                            if self.log {
+                            if self.debug {
                                 println!("{} LRU move_to_head removed  move_entry {:?}  NEXT  {:?} ",task, move_entry, next);
                             }
                         }                          
                     }      
                 }
             }
-            if self.log {
+            if self.debug {
                 println!("{} LRU move_to_head Detach complete...{:?}",task, key);
             }
         }
@@ -556,7 +569,7 @@ where K: std::cmp::Eq + std::hash::Hash + std::fmt::Debug + Clone + std::marker:
         head_entry.prev = Some(key.clone());
         self.head = Some(key);
 
-        if self.log {
+        if self.debug {
             println!("{} LRU move_to_head - attach to head - HEAD {:?} TAIL {:?}",task, self.head,self.tail);
             println!("{} LRU move_to_head complete.",task);
         }
@@ -613,14 +626,17 @@ pub(crate) fn start_service<K: Eq + Hash + Debug + Clone + Send + Sync + 'static
                     }
 
                 Some(client_ch) = lru_flush_rx.recv() => {
-                               
-                        println!("LRU service - flush lru ");
+                        if lru.log {
+                            println!("LRU service - flush lru ");
+                        }
                         let cache_guard = cache.0.lock().await;
                         let persist_ch = lru.persist_submit_ch.clone();
                     
                         for k in &lru {
 
-                            println!("lru iterate key {:?}",k);
+                            if lru.debug {
+                                println!("lru iterate key {:?}",k);
+                            }
                             if let Some(arc_node) = cache_guard.data.get(k) {
                                 if let Err(err) = persist_ch 
                                                 .send((0, k.clone(), arc_node.clone(), Instant::now()))
@@ -629,11 +645,15 @@ pub(crate) fn start_service<K: Eq + Hash + Debug + Clone + Send + Sync + 'static
                                 }
                             }                    
                         }   
-                        println!("LRU: flush-persist Send on client_ch ");
+                        if lru.log {
+                            println!("LRU: flush-persist Send on client_ch ");
+                        }
                         if let Err(err) = client_ch.send(()).await {
                             panic!("LRU send on client_ch {} ",err);
                         };
-                        println!("LRU shutdown ");
+                        if lru.log {
+                            println!("LRU shutdown ");
+                        }
                         return (); 
                 }                    
             }    
