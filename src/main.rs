@@ -52,7 +52,7 @@ const _LDT: u8 = 5;
 // node with substantial scalar data this parameter should be corresponding small (< 5) to minimise the space consumed
 // within the parent block. The more space consumed by the embedded child node data the more RCUs required to read the parent RNode data,
 // which will be an overhead in circumstances where child data is not required.
-const EMBEDDED_CHILD_NODES: usize = 40;//50; //10; // prod value: 20
+const EMBEDDED_CHILD_NODES: usize = 4;//50; //10; // prod value: 20
 
 // MAX_OV_BLOCKS - max number of overflow blocks. Set to the desired number of concurrent reads on overflow blocks ie. the degree of parallelism required. Prod may have upto 100.
 // As each block resides in its own UUID (PKey) there shoud be little contention when reading them all in parallel. When max is reached the overflow
