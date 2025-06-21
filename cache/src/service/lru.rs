@@ -23,10 +23,10 @@ pub enum LruAction {
 // the move_entry cache is separate
 #[derive(Clone, Debug)]
 struct Entry<K: Hash + Eq + Debug>{
-    pub key: K,
+    key: K,
     //
-    pub next: Option<K>,  
-    pub prev: Option<K>,
+    next: Option<K>,  
+    prev: Option<K>,
 }
 
 impl<K: Hash + Eq + Debug> Entry<K> {
@@ -76,7 +76,6 @@ impl<'a,  K: Hash + Eq + Debug + Clone> Iterator for Iter<'a,K> {
 //         //println!("\nDROP LRU Entry {:?}\n",self.key);
 //     }
 // }
-
 struct LRU<K: Hash + Eq + Debug,V> {
     capacity: usize,
     cnt : usize,
