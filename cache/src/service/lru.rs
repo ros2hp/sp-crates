@@ -39,20 +39,52 @@ impl<K: Hash + Eq + Debug> Entry<K> {
 }
 
 //#[derive(Clone)]
-struct Iter<'a, K: Hash + Eq + Debug > {
+struct IntoIter< K: Hash + Eq + Debug > {
+            
+    next_k : Option<K>,
+    lookup : HashMap<K,Entry<K>>,
+}
+
+impl< K: Hash + Eq + Debug > IntoIter<K> {
+
+    fn new(e : Option<K>, lk: HashMap<K,Entry<K>> ) -> Self {
+        IntoIter::<K>{next_k : e, lookup: lk}
+    }
+}
+
+impl<  K: Hash + Eq + Debug + Clone> Iterator for IntoIter<K> {
+
+    type Item = K;
+
+    fn next(&mut self) -> Option<Self::Item> {
+
+        if let None = self.next_k {
+            return None
+        }
+        match self.lookup.get(self.next_k.as_ref().unwrap()) {
+            Some(v) => {
+                self.next_k = v.next.clone();
+                Some(v.key.clone())
+            }
+            None => panic!("iter: expected a value in lookup got None")
+        }
+    }
+}
+
+struct Iter<'a, K: 'a + Hash + Eq + Debug > {
             
     next_k : Option<&'a K>,
     lookup : &'a HashMap<K,Entry<K>>,
 }
 
-impl<'a, K: Hash + Eq + Debug > Iter<'a, K> {
+impl<'a, K: 'a + Hash + Eq + Debug > Iter<'a, K> {
 
     fn new(e : Option<&'a K>, lk: &'a HashMap<K,Entry<K>> ) -> Self {
         Iter::<'a, K>{next_k : e, lookup: lk}
     }
 }
 
-impl<'a,  K: Hash + Eq + Debug + Clone> Iterator for Iter<'a,K> {
+impl<'a,  K: 'a + Hash + Eq + Debug + Clone> Iterator for Iter<'a,K> {
 
     type Item = &'a K;
 
@@ -120,7 +152,27 @@ struct LRU<K: Hash + Eq + Debug,V> {
 //     );
 // }
 
-impl<'a , K: Hash + Eq + Debug + Clone, V> IntoIterator for &'a LRU<K,V> {
+impl<'a , K: Hash + Eq + Debug + Clone, V> IntoIterator for LRU<K,V> {
+
+    type Item = K;
+    type IntoIter = IntoIter<K>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.into_iter()
+    }
+} 
+
+
+impl<K,V> LRU<K,V>
+where K: Eq + Hash + Debug + Clone
+{
+
+    fn into_iter(self) -> IntoIter<K> {
+        IntoIter::new(self.head.clone(),self.lookup)
+    }
+}
+
+impl<'a , K: 'a +  Hash + Eq + Debug + Clone, V> IntoIterator for &'a LRU<K,V> {
 
     type Item = &'a K;
     type IntoIter = Iter<'a, K>;
@@ -139,6 +191,8 @@ where K: Eq + Hash + Debug + Clone
         Iter::new(self.head.as_ref(),&self.lookup)
     }
 }
+
+
 
 //      head      tail
 //       n -> n1 -> n2 ->  (next)
@@ -630,13 +684,14 @@ pub(crate) fn start_service<K: Eq + Hash + Debug + Clone + Send + Sync + 'static
                         }
                         let cache_guard = cache.0.lock().await;
                         let persist_ch = lru.persist_submit_ch.clone();
+                        let logit = lru.log;
                     
                         for k in &lru {
 
-                            if lru.log {
+                            if logit {
                                 println!("lru iterate key {:?}",k);
                             }
-                            if let Some(arc_node) = cache_guard.data.get(k) {
+                            if let Some(arc_node) = cache_guard.data.get(&k) {
                                 if let Err(err) = persist_ch 
                                                 .send((0, k.clone(), arc_node.clone(), Instant::now()))
                                                 .await {
@@ -644,13 +699,13 @@ pub(crate) fn start_service<K: Eq + Hash + Debug + Clone + Send + Sync + 'static
                                 }
                             }                    
                         }   
-                        if lru.log {
+                        if logit {
                             println!("LRU: flush-persist Send on client_ch ");
                         }
                         if let Err(err) = client_ch.send(()).await {
                             panic!("LRU send on client_ch {} ",err);
                         };
-                        if lru.log {
+                        if logit {
                             println!("LRU shutdown ");
                         }
                         return (); 
