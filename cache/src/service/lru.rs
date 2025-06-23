@@ -671,7 +671,7 @@ pub(crate) fn start_service<K: Eq + Hash + Debug + Clone + Send + Sync + 'static
                                 lru.move_to_head( task, key).await;
                             }
                         }
-                        // send response back to client...sync'd.
+                        // sync to client.
                         if let Err(err) = client_ch.send(true).await {
                             panic!("LRU action send to client_ch {} ",err);
                         };
@@ -685,13 +685,14 @@ pub(crate) fn start_service<K: Eq + Hash + Debug + Clone + Send + Sync + 'static
                         let cache_guard = cache.0.lock().await;
                         let persist_ch = lru.persist_submit_ch.clone();
                         let logit = lru.log;
-                    
+
+                        // iterate over LRU list to flush (persist) each cache value        
                         for k in &lru {
 
                             if logit {
                                 println!("lru iterate key {:?}",k);
                             }
-                            if let Some(arc_node) = cache_guard.data.get(&k) {
+                            if let Some(arc_node) = cache_guard.data.get(k) {
                                 if let Err(err) = persist_ch 
                                                 .send((0, k.clone(), arc_node.clone(), Instant::now()))
                                                 .await {
