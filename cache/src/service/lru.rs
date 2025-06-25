@@ -38,7 +38,7 @@ impl<K: Hash + Eq + Debug> Entry<K> {
     }
 }
 
-//#[derive(Clone)]
+#[derive(Clone)]
 struct IntoIter< K: Hash + Eq + Debug > {
             
     next_k : Option<K>,
