@@ -32,6 +32,23 @@ CREATE OR REPLACE PROCEDURE identify_business_rules (
     v_ref_owner      VARCHAR2(30);
     v_ref_cols       VARCHAR2(2000);
 
+    -- Trigger body analysis variables
+    v_trig_body      VARCHAR2(2000);
+    v_trig_truncated VARCHAR2(1);
+    v_trig_line      VARCHAR2(2000);
+    v_trig_upper     VARCHAR2(2000);
+    v_trig_pos       NUMBER;
+    v_trig_next      NUMBER;
+    v_trig_len       NUMBER;
+    v_trig_linenum   NUMBER;
+    v_trig_is_simple VARCHAR2(1);
+    v_sig_lines      NUMBER;
+    v_trig_in_exc    VARCHAR2(1);
+    v_trig_if_pend   VARCHAR2(1);
+    v_trig_if_start  NUMBER;
+    v_trig_case_pend VARCHAR2(1);
+    v_trig_case_start NUMBER;
+
     -- Cursor for all PL/SQL source, ordered to process object-by-object
     CURSOR c_source IS
         SELECT s.name,
@@ -43,7 +60,7 @@ CREATE OR REPLACE PROCEDURE identify_business_rules (
                all_objects o
         WHERE  s.owner = p_owner
         AND    s.type IN ('PACKAGE', 'PACKAGE BODY', 'PROCEDURE',
-                          'FUNCTION', 'TRIGGER')
+                          'FUNCTION')
         AND    o.owner       = s.owner
         AND    o.object_name = s.name
         AND    o.object_type = s.type
@@ -339,15 +356,380 @@ BEGIN
     COMMIT;
 
     -- ================================================================
-    -- PART 2: Trigger metadata as business rules
+    -- PART 2: Trigger analysis using trigger_body from ALL_TRIGGERS
     -- ================================================================
     FOR r_trg IN c_trigger_meta LOOP
+
+        -- Always record the trigger metadata rule
         insert_rule(
             'Trigger ' || r_trg.trigger_name || ': ' ||
             r_trg.trigger_type || ' ' || r_trg.triggering_event ||
             ' ON ' || r_trg.table_owner || '.' || r_trg.table_name,
             r_trg.trigger_name, 'TRIGGER', r_trg.status,
             NULL, NULL, 'TRIGGER_RULE');
+
+        -- Read trigger_body (LONG column) into VARCHAR2(2000)
+        v_trig_body := NULL;
+        v_trig_truncated := 'N';
+        BEGIN
+            SELECT trigger_body INTO v_trig_body
+            FROM   all_triggers
+            WHERE  owner        = p_owner
+            AND    trigger_name = r_trg.trigger_name;
+        EXCEPTION
+            WHEN VALUE_ERROR THEN
+                -- Body exceeds 2000 chars; read what we can, mark truncated
+                v_trig_body := NULL;
+                v_trig_truncated := 'Y';
+                insert_rule(
+                    'Trigger body exceeds 2000 chars - analysis based on partial body',
+                    r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                    NULL, NULL, 'TRIGGER_RULE');
+            WHEN NO_DATA_FOUND THEN
+                v_trig_body := NULL;
+        END;
+
+        IF v_trig_body IS NULL AND v_trig_truncated = 'N' THEN
+            GOTO next_trigger;
+        END IF;
+
+        -- --------------------------------------------------------
+        -- Determine if trigger is a simple procedure call.
+        -- A simple trigger body looks like:
+        --   BEGIN proc_name(args); END;
+        --   BEGIN schema.proc_name(args); END;
+        -- We count "significant" lines (not BEGIN, END, blank, comment).
+        -- If only 1 significant line with no control flow keywords,
+        -- it is a simple procedure call.
+        -- --------------------------------------------------------
+        v_sig_lines := 0;
+        v_trig_is_simple := 'Y';
+        v_trig_len := NVL(LENGTH(v_trig_body), 0);
+        v_trig_pos := 1;
+
+        -- First pass: count significant lines and check for complexity
+        WHILE v_trig_pos <= v_trig_len LOOP
+            v_trig_next := INSTR(v_trig_body, CHR(10), v_trig_pos);
+            IF v_trig_next = 0 THEN
+                v_trig_next := v_trig_len + 1;
+            END IF;
+
+            v_trig_line := SUBSTR(v_trig_body, v_trig_pos,
+                                  v_trig_next - v_trig_pos);
+            v_trig_line := LTRIM(RTRIM(v_trig_line,
+                                 CHR(10) || CHR(13) || ' '));
+            v_trig_upper := UPPER(v_trig_line);
+
+            v_trig_pos := v_trig_next + 1;
+
+            -- Skip blanks and comments
+            IF v_trig_line IS NULL THEN
+                GOTO next_trig_scan;
+            END IF;
+            IF SUBSTR(v_trig_line, 1, 2) = '--' THEN
+                GOTO next_trig_scan;
+            END IF;
+
+            -- Skip BEGIN, END, DECLARE keywords
+            IF v_trig_upper = 'BEGIN' OR
+               v_trig_upper = 'END;' OR
+               SUBSTR(v_trig_upper, 1, 4) = 'END ' OR
+               v_trig_upper = 'DECLARE' THEN
+                GOTO next_trig_scan;
+            END IF;
+
+            -- This is a significant line
+            v_sig_lines := v_sig_lines + 1;
+
+            -- Check for control flow / complexity keywords
+            IF INSTR(v_trig_upper, 'IF ') > 0 OR
+               INSTR(v_trig_upper, 'ELSIF') > 0 OR
+               INSTR(v_trig_upper, 'CASE') > 0 OR
+               INSTR(v_trig_upper, 'LOOP') > 0 OR
+               INSTR(v_trig_upper, 'FOR ') > 0 OR
+               INSTR(v_trig_upper, 'WHILE ') > 0 OR
+               INSTR(v_trig_upper, 'RAISE') > 0 OR
+               INSTR(v_trig_upper, 'EXCEPTION') > 0 OR
+               INSTR(v_trig_upper, 'CURSOR') > 0 OR
+               INSTR(v_trig_upper, 'SELECT') > 0 OR
+               INSTR(v_trig_upper, 'INSERT') > 0 OR
+               INSTR(v_trig_upper, 'UPDATE') > 0 OR
+               INSTR(v_trig_upper, 'DELETE') > 0 THEN
+                v_trig_is_simple := 'N';
+            END IF;
+
+            <<next_trig_scan>>
+            NULL;
+        END LOOP;
+
+        -- More than 1 significant line also means not simple
+        IF v_sig_lines > 1 THEN
+            v_trig_is_simple := 'N';
+        END IF;
+
+        -- If truncated, cannot be certain it is simple
+        IF v_trig_truncated = 'Y' THEN
+            v_trig_is_simple := 'N';
+        END IF;
+
+        IF v_trig_is_simple = 'Y' THEN
+            -- Simple procedure call trigger - just record that fact
+            insert_rule(
+                'Trigger delegates to procedure call (simple wrapper)',
+                r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                NULL, NULL, 'TRIGGER_RULE');
+            GOTO next_trigger;
+        END IF;
+
+        -- --------------------------------------------------------
+        -- Complex trigger: parse body line-by-line for patterns
+        -- (same analysis as Part 1 for PL/SQL source)
+        -- --------------------------------------------------------
+        v_trig_pos     := 1;
+        v_trig_linenum := 0;
+        v_trig_in_exc  := 'N';
+        v_trig_if_pend := 'N';
+        v_trig_case_pend := 'N';
+
+        WHILE v_trig_pos <= v_trig_len LOOP
+            v_trig_next := INSTR(v_trig_body, CHR(10), v_trig_pos);
+            IF v_trig_next = 0 THEN
+                v_trig_next := v_trig_len + 1;
+            END IF;
+
+            v_trig_line := SUBSTR(v_trig_body, v_trig_pos,
+                                  v_trig_next - v_trig_pos);
+            v_trig_line := LTRIM(RTRIM(v_trig_line,
+                                 CHR(10) || CHR(13) || ' '));
+            v_trig_upper := UPPER(v_trig_line);
+            v_trig_linenum := v_trig_linenum + 1;
+
+            v_trig_pos := v_trig_next + 1;
+
+            -- Skip blanks and comments
+            IF v_trig_line IS NULL THEN
+                GOTO next_trig_line;
+            END IF;
+            IF SUBSTR(v_trig_line, 1, 2) = '--' THEN
+                GOTO next_trig_line;
+            END IF;
+
+            -- ---- Multi-line IF/THEN resolution ----
+            IF v_trig_if_pend = 'Y' THEN
+                IF INSTR(v_trig_upper, 'THEN') > 0 THEN
+                    insert_rule(
+                        'Trigger conditional logic at lines ' ||
+                        TO_CHAR(v_trig_if_start) || '-' ||
+                        TO_CHAR(v_trig_linenum),
+                        r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                        v_trig_if_start, v_trig_linenum, 'IF_THEN');
+                    v_trig_if_pend := 'N';
+                    GOTO next_trig_line;
+                END IF;
+            END IF;
+
+            -- ---- Multi-line CASE/WHEN resolution ----
+            IF v_trig_case_pend = 'Y' THEN
+                IF INSTR(v_trig_upper, 'WHEN') > 0 THEN
+                    insert_rule(
+                        'Trigger case expression at lines ' ||
+                        TO_CHAR(v_trig_case_start) || '-' ||
+                        TO_CHAR(v_trig_linenum),
+                        r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                        v_trig_case_start, v_trig_linenum, 'CASE_WHEN');
+                    v_trig_case_pend := 'N';
+                    GOTO next_trig_line;
+                END IF;
+            END IF;
+
+            -- ---- Pattern: IF ... THEN ----
+            IF INSTR(v_trig_upper, 'IF ') > 0 AND
+               INSTR(v_trig_upper, 'END IF') = 0 AND
+               INSTR(v_trig_upper, 'ELSIF') = 0 THEN
+
+                IF INSTR(v_trig_upper, ' THEN') > 0 OR
+                   INSTR(v_trig_upper, ')THEN') > 0 THEN
+                    insert_rule(
+                        'Trigger conditional: ' ||
+                        SUBSTR(v_trig_line, 1, 200),
+                        r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                        v_trig_linenum, v_trig_linenum, 'IF_THEN');
+                ELSE
+                    v_trig_if_pend := 'Y';
+                    v_trig_if_start := v_trig_linenum;
+                END IF;
+                GOTO next_trig_line;
+            END IF;
+
+            -- ---- Pattern: ELSIF ----
+            IF INSTR(v_trig_upper, 'ELSIF') > 0 THEN
+                insert_rule(
+                    'Trigger conditional branch (ELSIF): ' ||
+                    SUBSTR(v_trig_line, 1, 200),
+                    r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                    v_trig_linenum, v_trig_linenum, 'IF_THEN');
+                GOTO next_trig_line;
+            END IF;
+
+            -- ---- Pattern: CASE ... WHEN ----
+            IF INSTR(v_trig_upper, 'CASE') > 0 AND
+               INSTR(v_trig_upper, 'END CASE') = 0 THEN
+
+                IF INSTR(v_trig_upper, 'WHEN') > 0 THEN
+                    insert_rule(
+                        'Trigger case expression: ' ||
+                        SUBSTR(v_trig_line, 1, 200),
+                        r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                        v_trig_linenum, v_trig_linenum, 'CASE_WHEN');
+                ELSE
+                    v_trig_case_pend := 'Y';
+                    v_trig_case_start := v_trig_linenum;
+                END IF;
+                GOTO next_trig_line;
+            END IF;
+
+            -- ---- Pattern: RAISE_APPLICATION_ERROR ----
+            IF INSTR(v_trig_upper, 'RAISE_APPLICATION_ERROR') > 0 THEN
+                insert_rule(
+                    'Trigger error raised: ' ||
+                    SUBSTR(v_trig_line, 1, 200),
+                    r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                    v_trig_linenum, v_trig_linenum, 'RAISE_EXCEPTION');
+                GOTO next_trig_line;
+            END IF;
+
+            -- ---- Pattern: RAISE ----
+            IF INSTR(v_trig_upper, 'RAISE') > 0 AND
+               INSTR(v_trig_upper, 'RAISE_APPLICATION_ERROR') = 0 THEN
+                IF v_trig_upper = 'RAISE;' OR
+                   v_trig_upper = 'RAISE ;' THEN
+                    insert_rule(
+                        'Trigger exception re-raised',
+                        r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                        v_trig_linenum, v_trig_linenum, 'RAISE_EXCEPTION');
+                ELSE
+                    insert_rule(
+                        'Trigger named exception raised: ' ||
+                        SUBSTR(v_trig_line, 1, 200),
+                        r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                        v_trig_linenum, v_trig_linenum, 'RAISE_EXCEPTION');
+                END IF;
+                GOTO next_trig_line;
+            END IF;
+
+            -- ---- Pattern: EXIT WHEN ----
+            IF INSTR(v_trig_upper, 'EXIT WHEN') > 0 OR
+               INSTR(v_trig_upper, 'EXIT  WHEN') > 0 THEN
+                insert_rule(
+                    'Trigger loop exit: ' ||
+                    SUBSTR(v_trig_line, 1, 200),
+                    r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                    v_trig_linenum, v_trig_linenum, 'LOOP_EXIT');
+                GOTO next_trig_line;
+            END IF;
+
+            -- ---- Pattern: EXCEPTION block ----
+            IF v_trig_upper = 'EXCEPTION' OR
+               SUBSTR(v_trig_upper, 1, 10) = 'EXCEPTION ' THEN
+                v_trig_in_exc := 'Y';
+                insert_rule(
+                    'Trigger exception handler block',
+                    r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                    v_trig_linenum, v_trig_linenum, 'EXCEPTION_HANDLER');
+                GOTO next_trig_line;
+            END IF;
+
+            -- ---- Pattern: WHEN in exception handler ----
+            IF v_trig_in_exc = 'Y' AND
+               INSTR(v_trig_upper, 'WHEN ') > 0 THEN
+                insert_rule(
+                    'Trigger exception handler: ' ||
+                    SUBSTR(v_trig_line, 1, 200),
+                    r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                    v_trig_linenum, v_trig_linenum, 'EXCEPTION_HANDLER');
+                GOTO next_trig_line;
+            END IF;
+
+            -- Reset exception flag on BEGIN/END
+            IF v_trig_upper = 'BEGIN' OR
+               SUBSTR(v_trig_upper, 1, 4) = 'END;' OR
+               SUBSTR(v_trig_upper, 1, 4) = 'END ' THEN
+                v_trig_in_exc := 'N';
+            END IF;
+
+            -- ---- Pattern: DML in trigger (business logic) ----
+            IF INSTR(v_trig_upper, 'INSERT ') > 0 OR
+               INSTR(v_trig_upper, 'INSERT' || CHR(10)) > 0 THEN
+                insert_rule(
+                    'Trigger performs INSERT: ' ||
+                    SUBSTR(v_trig_line, 1, 200),
+                    r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                    v_trig_linenum, v_trig_linenum, 'TRIGGER_RULE');
+                GOTO next_trig_line;
+            END IF;
+
+            IF INSTR(v_trig_upper, 'UPDATE ') > 0 THEN
+                insert_rule(
+                    'Trigger performs UPDATE: ' ||
+                    SUBSTR(v_trig_line, 1, 200),
+                    r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                    v_trig_linenum, v_trig_linenum, 'TRIGGER_RULE');
+                GOTO next_trig_line;
+            END IF;
+
+            IF INSTR(v_trig_upper, 'DELETE ') > 0 THEN
+                insert_rule(
+                    'Trigger performs DELETE: ' ||
+                    SUBSTR(v_trig_line, 1, 200),
+                    r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                    v_trig_linenum, v_trig_linenum, 'TRIGGER_RULE');
+                GOTO next_trig_line;
+            END IF;
+
+            -- ---- Pattern: SELECT INTO (assignment/validation) ----
+            IF INSTR(v_trig_upper, 'SELECT') > 0 AND
+               INSTR(v_trig_upper, 'INTO') > 0 THEN
+                insert_rule(
+                    'Trigger performs SELECT INTO: ' ||
+                    SUBSTR(v_trig_line, 1, 200),
+                    r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                    v_trig_linenum, v_trig_linenum, 'TRIGGER_RULE');
+                GOTO next_trig_line;
+            END IF;
+
+            -- ---- Pattern: :NEW / :OLD references ----
+            IF INSTR(v_trig_upper, ':NEW.') > 0 OR
+               INSTR(v_trig_upper, ':OLD.') > 0 THEN
+                -- Assignment to :NEW (data modification rule)
+                IF INSTR(v_trig_line, ':=') > 0 THEN
+                    insert_rule(
+                        'Trigger column assignment: ' ||
+                        SUBSTR(v_trig_line, 1, 200),
+                        r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                        v_trig_linenum, v_trig_linenum, 'TRIGGER_RULE');
+                END IF;
+            END IF;
+
+            <<next_trig_line>>
+            NULL;
+        END LOOP;
+
+        -- Close any pending multi-line patterns for this trigger
+        IF v_trig_if_pend = 'Y' THEN
+            insert_rule(
+                'Trigger conditional (IF without matching THEN)',
+                r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                v_trig_if_start, v_trig_if_start, 'IF_THEN');
+        END IF;
+        IF v_trig_case_pend = 'Y' THEN
+            insert_rule(
+                'Trigger case (CASE without matching WHEN)',
+                r_trg.trigger_name, 'TRIGGER', r_trg.status,
+                v_trig_case_start, v_trig_case_start, 'CASE_WHEN');
+        END IF;
+
+        <<next_trigger>>
+        NULL;
     END LOOP;
 
     COMMIT;
