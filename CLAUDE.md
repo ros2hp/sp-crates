@@ -85,6 +85,110 @@ This is a Cargo workspace with two main crates:
    - Located in `cache/event_stats/` directory
    - Tracks operation durations and channel wait times
 
+### System Architecture Diagram
+
+The LRU cache system follows a layered architecture with clear separation between application code and cache infrastructure:
+
+```
+┌─────────────────────────────────────────────────────┐
+│         Database Load Application                    │
+│                  (application code)                  │
+└──────────┬──────────────┬──────────────┬────────────┘
+           │              │              │
+           ▼              ▼              ▼
+    ┌──────────┐   ┌──────────┐   ┌──────────┐
+    │  Load    │   │  Load    │   │  Load    │
+    │  Task    │   │  Task    │   │  Task    │
+    └─────┬────┘   └─────┬────┘   └─────┬────┘
+          │ get          │ get          │ get
+          │         Flush│              │
+          ▼              ▼              ▼
+    ┌─────────────────────────────────────────────┐
+    │              Cache                          │◄──── Confirm
+    │           (cache code)                      │
+    └──┬──────────┬──────────┬──────────┬────────┘
+       │          │          │          │
+       │ Flush    │ Complete │Attach    │IsPersist
+       │          │          │Move      │
+       ▼          ▼          ▼          ▼
+    ┌─────────────────────────────────────────────┐
+    │           LRU Service                       │──── Read ──►
+    │           (cache code)                      │
+    └──────────────────┬──────────────────────────┘
+                       │ Submit
+                       ▼
+    ┌─────────────────────────────────────────────┐
+    │         Persist Service                     │◄──── Completed
+    │           (cache code)                      │
+    └──┬──────────────┬──────────────┬───────────┘
+       │ Shutdown     │ Persist      │ Persist
+       │              │              │
+       ▼              ▼              ▼
+    ┌──────────┐   ┌──────────┐   ┌──────────┐
+    │ Persist  │   │ Persist  │   │ Persist  │
+    │  Task    │   │  Task    │   │  Task    │
+    └─────┬────┘   └─────┬────┘   └─────┬────┘
+          │              │              │
+          │ Persist      │ Persist      │ Persist
+          ▼              ▼              ▼
+    ┌─────────────────────────────────────────────┐
+    │              Database                       │
+    │            (DynamoDB)                       │
+    └─────────────────────────────────────────────┘
+```
+
+#### Component Interactions
+
+**Application Layer (Application Code)**:
+- **Database Load Application**: Main application that orchestrates data loading
+- **Load Tasks**: Multiple concurrent tasks (up to `MAX_SP_TASKS`) that process parent nodes
+  - Call `cache.get()` to retrieve/create cache entries
+  - Call `cache.flush()` during graceful shutdown
+
+**Cache Layer (Cache Code)**:
+- **Cache**: Central coordination point with state management
+  - API: `get()`, `flush()`, `unlock()`
+  - Tracks states: `inuse`, `persisting`, `loading`
+  - Sends to LRU: `Attach`, `MoveToHead`, `Shutdown`, `Flush`
+  - Receives from Persist: `Confirm` (persistence complete)
+  - Queries Persist: `IsPersist` (check if key is being persisted)
+
+- **LRU Service**: Manages cache eviction policy
+  - Receives: `Attach` (new entry), `MoveToHead` (cache hit), `Flush` (shutdown)
+  - Maintains doubly-linked list for LRU ordering
+  - On capacity exceeded: identifies tail entry for eviction
+  - Sends to Persist: `Submit` (request persistence before eviction)
+  - Queries Cache: `Read` (check entry state before eviction)
+
+- **Persist Service**: Manages asynchronous database writes
+  - Maintains pool of persist tasks (up to `MAX_PERSIST_TASKS`)
+  - Receives: `Submit` (from LRU), `Shutdown` (graceful shutdown)
+  - Distributes work to available persist tasks via channel
+  - Receives: `Completed` (from persist tasks)
+  - Sends to Cache: `Confirm` (persistence done, update state)
+
+**Database Layer (Application Code)**:
+- **Persist Tasks**: Worker tasks that execute database writes
+  - Receive persistence requests via channel
+  - Execute `Persistence<K,D>::persist()` trait implementation
+  - Write to DynamoDB (batch writes, conditional updates)
+  - Report `Completed` back to Persist Service
+
+#### Communication Patterns
+
+- **Channels**: All inter-component communication uses Tokio channels (mpsc, broadcast)
+- **API Calls**: Direct function calls for synchronous operations (within Mutex locks)
+- **Coordination**: Broadcast channels synchronize state transitions across tasks
+- **Backpressure**: Bounded channels and semaphores limit concurrent operations
+
+#### Graceful Shutdown Flow
+
+1. Application calls `cache.flush()` on all load tasks
+2. Cache sends `Flush` to LRU Service
+3. LRU Service submits all entries for persistence
+4. Persist Service waits for all persist tasks to complete
+5. Cache confirms all entries persisted before shutdown
+
 ### Core Components
 
 #### Cache System (`cache/src/lib.rs`)
@@ -143,6 +247,73 @@ Handles asynchronous persistence of cache entries:
 - Child nodes maintain reverse edges back to parents in sortkey format: `R#<parent-type>#:<edge-attr>`
 - Managed via `RKey` (src/rkey.rs) and `RNode` (src/node.rs)
 - Cache prevents duplicate writes and coordinates concurrent updates
+
+### Data Schema Example: Parent-Child with Scalar Predicates
+
+This example demonstrates GoGraph/DynamoDB design patterns for a Manager-Employee relationship.
+
+#### Type Definitions
+
+**Employee (Child) Type**:
+- Scalars: Age (Ag), JobTitle (JT), YearsExperience (YE), Salary (Sa)
+- UID Predicate: WorksFor (WF) → Manager
+
+**Manager (Parent) Type**:
+- Scalars: Age (Ag), JobTitle (JT), YearsExperience (YE), Salary (Sa)
+- UID Predicate: Manages (Mg) → Employee
+
+#### Sort Key Patterns
+
+```
+# Node scalar data (system partition "A#", data partition "A#")
+A#A#T                    - Type attribute
+A#A#:Ag                  - Age scalar
+A#A#:JT                  - JobTitle scalar
+A#A#:YE                  - YearsExperience scalar
+A#A#:Sa                  - Salary scalar
+
+# UID predicate edges (system partition "A#", data partition "G#")
+A#G#:Mg                  - Manager's "Manages" edge (Employee UUIDs)
+A#G#:WF                  - Employee's "WorksFor" edge (Manager UUIDs)
+
+# Propagated child data at parent
+A#G#:Mg|Ag              - Propagated Age from Employees
+A#G#:Mg|JT              - Propagated JobTitle from Employees
+A#G#:Mg|YE              - Propagated YearsExperience from Employees
+A#G#:Mg|Sa              - Propagated Salary from Employees
+
+# Overflow blocks (when Manager has >4 Employees)
+A#G#:Mg#:1              - Overflow block 1
+A#G#:Mg#:2              - Overflow block 2
+```
+
+#### Example DynamoDB Items
+
+**Manager Node with Embedded Employees**:
+```json
+{
+  "PKey": "<manager-uuid-binary>",
+  "SortK": "A#G#:Mg",
+  "Nd": ["<emp1-uuid>", "<emp2-uuid>", "<emp3-uuid>"],
+  "LN": [28, 35, 42],
+  "LS": ["Software Engineer", "Senior Engineer", "Lead Engineer"],
+  "XN": [5, 10, 15],
+  "LN#2": [75000, 95000, 110000]
+}
+```
+
+**Attribute Mapping**:
+- `Nd` - Employee UUIDs (child references)
+- `LN` - Ages (corresponds to Ag scalar)
+- `LS` - Job Titles (corresponds to JT scalar)
+- `XN` - Years Experience (corresponds to YE scalar)
+- `LN#2` - Salaries (corresponds to Sa scalar)
+
+**Data Propagation Benefits**:
+1. **Single-node query**: Manager and all employee data retrieved in one DynamoDB query
+2. **Positional alignment**: Employee at `Nd[i]` has Age at `LN[i]`, JobTitle at `LS[i]`, etc.
+3. **Performance**: ~55-104 μs per employee (based on GoGraph benchmarks)
+4. **Scalability**: Overflow blocks partition large teams across multiple items
 
 ### Key Files
 
