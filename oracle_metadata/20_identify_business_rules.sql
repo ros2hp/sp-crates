@@ -32,6 +32,14 @@ CREATE OR REPLACE PROCEDURE identify_business_rules (
     v_ref_owner      VARCHAR2(30);
     v_ref_cols       VARCHAR2(2000);
 
+    -- IF/CASE nesting stacks (comma-delimited line_number_from values)
+    -- Used to match END IF / END CASE back to the opening IF / CASE
+    v_if_stack       VARCHAR2(2000) := '';
+    v_case_stack     VARCHAR2(2000) := '';
+    v_pop_tmp        VARCHAR2(2000);
+    v_pop_pos        NUMBER;
+    v_popped_line    NUMBER;
+
     -- Trigger body analysis variables
     v_trig_body      VARCHAR2(2000);
     v_trig_truncated VARCHAR2(1);
@@ -48,6 +56,8 @@ CREATE OR REPLACE PROCEDURE identify_business_rules (
     v_trig_if_start  NUMBER;
     v_trig_case_pend VARCHAR2(1);
     v_trig_case_start NUMBER;
+    v_trig_if_stack  VARCHAR2(2000);
+    v_trig_case_stack VARCHAR2(2000);
 
     -- Cursor for all PL/SQL source, ordered to process object-by-object
     CURSOR c_source IS
@@ -142,6 +152,27 @@ CREATE OR REPLACE PROCEDURE identify_business_rules (
         END IF;
     END insert_rule;
 
+    -- Helper: update line_number_to for an existing rule when END IF
+    -- or END CASE is found. Matches on object, type, pattern, and the
+    -- original line_number_from that was pushed onto the stack.
+    PROCEDURE update_rule (
+        p_object    VARCHAR2,
+        p_type      VARCHAR2,
+        p_line_from NUMBER,
+        p_end_line  NUMBER,
+        p_pattern   VARCHAR2
+    ) IS
+    BEGIN
+        UPDATE meta_business_rules
+        SET    line_number_to = p_end_line
+        WHERE  run_id           = p_run_id
+        AND    source_owner     = p_owner
+        AND    source_object    = p_object
+        AND    source_type      = p_type
+        AND    line_number_from = p_line_from
+        AND    pattern_type     = p_pattern;
+    END update_rule;
+
 BEGIN
     v_start := SYSDATE;
     SELECT seq_meta_log_id.NEXTVAL INTO v_log_id FROM dual;
@@ -174,6 +205,8 @@ BEGIN
             v_in_exception  := 'N';
             v_if_pending    := 'N';
             v_case_pending  := 'N';
+            v_if_stack      := '';
+            v_case_stack    := '';
         END IF;
 
         -- Prepare trimmed and uppercase versions
@@ -196,6 +229,8 @@ BEGIN
                     TO_CHAR(v_if_start_line) || '-' || TO_CHAR(r_src.line),
                     r_src.name, r_src.type, r_src.status,
                     v_if_start_line, r_src.line, 'IF_THEN');
+                -- Push the IF start line onto stack for END IF matching
+                v_if_stack := v_if_stack || TO_CHAR(v_if_start_line) || ',';
                 v_if_pending := 'N';
                 GOTO next_line;
             END IF;
@@ -209,6 +244,8 @@ BEGIN
                     TO_CHAR(v_case_start_line) || '-' || TO_CHAR(r_src.line),
                     r_src.name, r_src.type, r_src.status,
                     v_case_start_line, r_src.line, 'CASE_WHEN');
+                -- Push the CASE start line onto stack for END CASE matching
+                v_case_stack := v_case_stack || TO_CHAR(v_case_start_line) || ',';
                 v_case_pending := 'N';
                 GOTO next_line;
             END IF;
@@ -226,6 +263,8 @@ BEGIN
                     'Conditional logic: ' || SUBSTR(v_trimmed, 1, 200),
                     r_src.name, r_src.type, r_src.status,
                     r_src.line, r_src.line, 'IF_THEN');
+                -- Push onto IF stack for END IF matching
+                v_if_stack := v_if_stack || TO_CHAR(r_src.line) || ',';
             ELSE
                 -- IF without THEN - multi-line
                 v_if_pending := 'Y';
@@ -253,10 +292,50 @@ BEGIN
                     'Case expression: ' || SUBSTR(v_trimmed, 1, 200),
                     r_src.name, r_src.type, r_src.status,
                     r_src.line, r_src.line, 'CASE_WHEN');
+                -- Push onto CASE stack for END CASE matching
+                v_case_stack := v_case_stack || TO_CHAR(r_src.line) || ',';
             ELSE
                 -- CASE without WHEN - multi-line
                 v_case_pending := 'Y';
                 v_case_start_line := r_src.line;
+            END IF;
+            GOTO next_line;
+        END IF;
+
+        -- ---- Pattern: END IF - update line_number_to ----
+        IF INSTR(v_upper_text, 'END IF') > 0 THEN
+            -- Pop most recent IF line_from from stack
+            IF v_if_stack IS NOT NULL AND LENGTH(v_if_stack) > 0 THEN
+                v_pop_tmp := RTRIM(v_if_stack, ',');
+                v_pop_pos := INSTR(v_pop_tmp, ',', -1);
+                IF v_pop_pos = 0 THEN
+                    v_popped_line := TO_NUMBER(v_pop_tmp);
+                    v_if_stack := '';
+                ELSE
+                    v_popped_line := TO_NUMBER(SUBSTR(v_pop_tmp, v_pop_pos + 1));
+                    v_if_stack := SUBSTR(v_pop_tmp, 1, v_pop_pos) || ',';
+                END IF;
+                update_rule(r_src.name, r_src.type,
+                            v_popped_line, r_src.line, 'IF_THEN');
+            END IF;
+            GOTO next_line;
+        END IF;
+
+        -- ---- Pattern: END CASE - update line_number_to ----
+        IF INSTR(v_upper_text, 'END CASE') > 0 THEN
+            -- Pop most recent CASE line_from from stack
+            IF v_case_stack IS NOT NULL AND LENGTH(v_case_stack) > 0 THEN
+                v_pop_tmp := RTRIM(v_case_stack, ',');
+                v_pop_pos := INSTR(v_pop_tmp, ',', -1);
+                IF v_pop_pos = 0 THEN
+                    v_popped_line := TO_NUMBER(v_pop_tmp);
+                    v_case_stack := '';
+                ELSE
+                    v_popped_line := TO_NUMBER(SUBSTR(v_pop_tmp, v_pop_pos + 1));
+                    v_case_stack := SUBSTR(v_pop_tmp, 1, v_pop_pos) || ',';
+                END IF;
+                update_rule(r_src.name, r_src.type,
+                            v_popped_line, r_src.line, 'CASE_WHEN');
             END IF;
             GOTO next_line;
         END IF;
@@ -485,11 +564,13 @@ BEGIN
         -- Complex trigger: parse body line-by-line for patterns
         -- (same analysis as Part 1 for PL/SQL source)
         -- --------------------------------------------------------
-        v_trig_pos     := 1;
-        v_trig_linenum := 0;
-        v_trig_in_exc  := 'N';
-        v_trig_if_pend := 'N';
+        v_trig_pos       := 1;
+        v_trig_linenum   := 0;
+        v_trig_in_exc    := 'N';
+        v_trig_if_pend   := 'N';
         v_trig_case_pend := 'N';
+        v_trig_if_stack  := '';
+        v_trig_case_stack := '';
 
         WHILE v_trig_pos <= v_trig_len LOOP
             v_trig_next := INSTR(v_trig_body, CHR(10), v_trig_pos);
@@ -523,6 +604,8 @@ BEGIN
                         TO_CHAR(v_trig_linenum),
                         r_trg.trigger_name, 'TRIGGER', r_trg.status,
                         v_trig_if_start, v_trig_linenum, 'IF_THEN');
+                    v_trig_if_stack := v_trig_if_stack ||
+                        TO_CHAR(v_trig_if_start) || ',';
                     v_trig_if_pend := 'N';
                     GOTO next_trig_line;
                 END IF;
@@ -537,6 +620,8 @@ BEGIN
                         TO_CHAR(v_trig_linenum),
                         r_trg.trigger_name, 'TRIGGER', r_trg.status,
                         v_trig_case_start, v_trig_linenum, 'CASE_WHEN');
+                    v_trig_case_stack := v_trig_case_stack ||
+                        TO_CHAR(v_trig_case_start) || ',';
                     v_trig_case_pend := 'N';
                     GOTO next_trig_line;
                 END IF;
@@ -554,6 +639,8 @@ BEGIN
                         SUBSTR(v_trig_line, 1, 200),
                         r_trg.trigger_name, 'TRIGGER', r_trg.status,
                         v_trig_linenum, v_trig_linenum, 'IF_THEN');
+                    v_trig_if_stack := v_trig_if_stack ||
+                        TO_CHAR(v_trig_linenum) || ',';
                 ELSE
                     v_trig_if_pend := 'Y';
                     v_trig_if_start := v_trig_linenum;
@@ -581,9 +668,53 @@ BEGIN
                         SUBSTR(v_trig_line, 1, 200),
                         r_trg.trigger_name, 'TRIGGER', r_trg.status,
                         v_trig_linenum, v_trig_linenum, 'CASE_WHEN');
+                    v_trig_case_stack := v_trig_case_stack ||
+                        TO_CHAR(v_trig_linenum) || ',';
                 ELSE
                     v_trig_case_pend := 'Y';
                     v_trig_case_start := v_trig_linenum;
+                END IF;
+                GOTO next_trig_line;
+            END IF;
+
+            -- ---- Pattern: END IF - update line_number_to ----
+            IF INSTR(v_trig_upper, 'END IF') > 0 THEN
+                IF v_trig_if_stack IS NOT NULL AND
+                   LENGTH(v_trig_if_stack) > 0 THEN
+                    v_pop_tmp := RTRIM(v_trig_if_stack, ',');
+                    v_pop_pos := INSTR(v_pop_tmp, ',', -1);
+                    IF v_pop_pos = 0 THEN
+                        v_popped_line := TO_NUMBER(v_pop_tmp);
+                        v_trig_if_stack := '';
+                    ELSE
+                        v_popped_line := TO_NUMBER(
+                            SUBSTR(v_pop_tmp, v_pop_pos + 1));
+                        v_trig_if_stack := SUBSTR(v_pop_tmp, 1,
+                            v_pop_pos) || ',';
+                    END IF;
+                    update_rule(r_trg.trigger_name, 'TRIGGER',
+                                v_popped_line, v_trig_linenum, 'IF_THEN');
+                END IF;
+                GOTO next_trig_line;
+            END IF;
+
+            -- ---- Pattern: END CASE - update line_number_to ----
+            IF INSTR(v_trig_upper, 'END CASE') > 0 THEN
+                IF v_trig_case_stack IS NOT NULL AND
+                   LENGTH(v_trig_case_stack) > 0 THEN
+                    v_pop_tmp := RTRIM(v_trig_case_stack, ',');
+                    v_pop_pos := INSTR(v_pop_tmp, ',', -1);
+                    IF v_pop_pos = 0 THEN
+                        v_popped_line := TO_NUMBER(v_pop_tmp);
+                        v_trig_case_stack := '';
+                    ELSE
+                        v_popped_line := TO_NUMBER(
+                            SUBSTR(v_pop_tmp, v_pop_pos + 1));
+                        v_trig_case_stack := SUBSTR(v_pop_tmp, 1,
+                            v_pop_pos) || ',';
+                    END IF;
+                    update_rule(r_trg.trigger_name, 'TRIGGER',
+                                v_popped_line, v_trig_linenum, 'CASE_WHEN');
                 END IF;
                 GOTO next_trig_line;
             END IF;
