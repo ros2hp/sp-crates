@@ -59,22 +59,24 @@ CREATE OR REPLACE PROCEDURE identify_business_rules (
     v_trig_if_stack  VARCHAR2(2000);
     v_trig_case_stack VARCHAR2(2000);
 
-    -- Cursor for all PL/SQL source, ordered to process object-by-object
-    CURSOR c_source IS
-        SELECT s.name,
-               s.type,
-               s.line,
-               s.text,
-               o.status
-        FROM   all_source  s,
-               all_objects o
-        WHERE  s.owner = p_owner
-        AND    s.type IN ('PACKAGE', 'PACKAGE BODY', 'PROCEDURE',
-                          'FUNCTION')
-        AND    o.owner       = s.owner
-        AND    o.object_name = s.name
-        AND    o.object_type = s.type
-        ORDER BY s.name, s.type, s.line;
+    -- Cursor for PL/SQL objects owned by p_owner
+    CURSOR c_source_object IS
+        SELECT object_name, object_type, status
+        FROM   all_objects
+        WHERE  owner       = p_owner
+        AND    object_type IN ('PACKAGE', 'PACKAGE BODY', 'PROCEDURE',
+                               'FUNCTION')
+        AND    status      = 'VALID'
+        ORDER BY object_name, object_type;
+
+    -- Cursor for source lines of a specific object
+    CURSOR c_source (cp_object_name VARCHAR2, cp_object_type VARCHAR2) IS
+        SELECT line, text
+        FROM   all_source
+        WHERE  owner = p_owner
+        AND    name  = cp_object_name
+        AND    type  = cp_object_type
+        ORDER BY line;
 
     -- Cursor for constraints
     CURSOR c_constraints IS
@@ -180,34 +182,19 @@ BEGIN
     -- ================================================================
     -- PART 1: Scan PL/SQL source for business rule patterns
     -- ================================================================
-    FOR r_src IN c_source LOOP
+    FOR r_obj IN c_source_object LOOP
 
-        -- Reset state tracking when we move to a new object
-        IF r_src.name != NVL(v_prev_object, '~') OR
-           r_src.type != NVL(v_prev_type, '~') THEN
-            -- Close any pending multi-line patterns from previous object
-            IF v_if_pending = 'Y' THEN
-                insert_rule(
-                    'Conditional logic (IF without THEN on same line)',
-                    v_prev_object, v_prev_type, v_obj_status,
-                    v_if_start_line, v_if_start_line, 'IF_THEN');
-            END IF;
-            IF v_case_pending = 'Y' THEN
-                insert_rule(
-                    'Case expression (CASE without WHEN on same line)',
-                    v_prev_object, v_prev_type, v_obj_status,
-                    v_case_start_line, v_case_start_line, 'CASE_WHEN');
-            END IF;
+        -- Reset state for each new object
+        v_prev_object   := r_obj.object_name;
+        v_prev_type     := r_obj.object_type;
+        v_obj_status    := r_obj.status;
+        v_in_exception  := 'N';
+        v_if_pending    := 'N';
+        v_case_pending  := 'N';
+        v_if_stack      := '';
+        v_case_stack    := '';
 
-            v_prev_object   := r_src.name;
-            v_prev_type     := r_src.type;
-            v_obj_status    := r_src.status;
-            v_in_exception  := 'N';
-            v_if_pending    := 'N';
-            v_case_pending  := 'N';
-            v_if_stack      := '';
-            v_case_stack    := '';
-        END IF;
+        FOR r_src IN c_source(r_obj.object_name, r_obj.object_type) LOOP
 
         -- Prepare trimmed and uppercase versions
         v_trimmed := LTRIM(RTRIM(r_src.text, CHR(10) || CHR(13) || ' '));
@@ -227,7 +214,7 @@ BEGIN
                 insert_rule(
                     'Conditional logic at lines ' ||
                     TO_CHAR(v_if_start_line) || '-' || TO_CHAR(r_src.line),
-                    r_src.name, r_src.type, r_src.status,
+                    r_obj.object_name, r_obj.object_type, r_obj.status,
                     v_if_start_line, r_src.line, 'IF_THEN');
                 -- Push the IF start line onto stack for END IF matching
                 v_if_stack := v_if_stack || TO_CHAR(v_if_start_line) || ',';
@@ -242,7 +229,7 @@ BEGIN
                 insert_rule(
                     'Case expression at lines ' ||
                     TO_CHAR(v_case_start_line) || '-' || TO_CHAR(r_src.line),
-                    r_src.name, r_src.type, r_src.status,
+                    r_obj.object_name, r_obj.object_type, r_obj.status,
                     v_case_start_line, r_src.line, 'CASE_WHEN');
                 -- Push the CASE start line onto stack for END CASE matching
                 v_case_stack := v_case_stack || TO_CHAR(v_case_start_line) || ',';
@@ -261,7 +248,7 @@ BEGIN
                 -- Single-line IF/THEN
                 insert_rule(
                     'Conditional logic: ' || SUBSTR(v_trimmed, 1, 200),
-                    r_src.name, r_src.type, r_src.status,
+                    r_obj.object_name, r_obj.object_type, r_obj.status,
                     r_src.line, r_src.line, 'IF_THEN');
                 -- Push onto IF stack for END IF matching
                 v_if_stack := v_if_stack || TO_CHAR(r_src.line) || ',';
@@ -277,7 +264,7 @@ BEGIN
         IF INSTR(v_upper_text, 'ELSIF') > 0 THEN
             insert_rule(
                 'Conditional branch (ELSIF): ' || SUBSTR(v_trimmed, 1, 200),
-                r_src.name, r_src.type, r_src.status,
+                r_obj.object_name, r_obj.object_type, r_obj.status,
                 r_src.line, r_src.line, 'IF_THEN');
             GOTO next_line;
         END IF;
@@ -290,7 +277,7 @@ BEGIN
                 -- Single-line CASE/WHEN
                 insert_rule(
                     'Case expression: ' || SUBSTR(v_trimmed, 1, 200),
-                    r_src.name, r_src.type, r_src.status,
+                    r_obj.object_name, r_obj.object_type, r_obj.status,
                     r_src.line, r_src.line, 'CASE_WHEN');
                 -- Push onto CASE stack for END CASE matching
                 v_case_stack := v_case_stack || TO_CHAR(r_src.line) || ',';
@@ -315,7 +302,7 @@ BEGIN
                     v_popped_line := TO_NUMBER(SUBSTR(v_pop_tmp, v_pop_pos + 1));
                     v_if_stack := SUBSTR(v_pop_tmp, 1, v_pop_pos) || ',';
                 END IF;
-                update_rule(r_src.name, r_src.type,
+                update_rule(r_obj.object_name, r_obj.object_type,
                             v_popped_line, r_src.line, 'IF_THEN');
             END IF;
             GOTO next_line;
@@ -334,7 +321,7 @@ BEGIN
                     v_popped_line := TO_NUMBER(SUBSTR(v_pop_tmp, v_pop_pos + 1));
                     v_case_stack := SUBSTR(v_pop_tmp, 1, v_pop_pos) || ',';
                 END IF;
-                update_rule(r_src.name, r_src.type,
+                update_rule(r_obj.object_name, r_obj.object_type,
                             v_popped_line, r_src.line, 'CASE_WHEN');
             END IF;
             GOTO next_line;
@@ -344,7 +331,7 @@ BEGIN
         IF INSTR(v_upper_text, 'RAISE_APPLICATION_ERROR') > 0 THEN
             insert_rule(
                 'Application error raised: ' || SUBSTR(v_trimmed, 1, 200),
-                r_src.name, r_src.type, r_src.status,
+                r_obj.object_name, r_obj.object_type, r_obj.status,
                 r_src.line, r_src.line, 'RAISE_EXCEPTION');
             GOTO next_line;
         END IF;
@@ -356,12 +343,12 @@ BEGIN
             IF v_upper_text = 'RAISE;' OR v_upper_text = 'RAISE ;' THEN
                 insert_rule(
                     'Exception re-raised',
-                    r_src.name, r_src.type, r_src.status,
+                    r_obj.object_name, r_obj.object_type, r_obj.status,
                     r_src.line, r_src.line, 'RAISE_EXCEPTION');
             ELSE
                 insert_rule(
                     'Named exception raised: ' || SUBSTR(v_trimmed, 1, 200),
-                    r_src.name, r_src.type, r_src.status,
+                    r_obj.object_name, r_obj.object_type, r_obj.status,
                     r_src.line, r_src.line, 'RAISE_EXCEPTION');
             END IF;
             GOTO next_line;
@@ -372,7 +359,7 @@ BEGIN
            INSTR(v_upper_text, 'EXIT  WHEN') > 0 THEN
             insert_rule(
                 'Loop exit condition: ' || SUBSTR(v_trimmed, 1, 200),
-                r_src.name, r_src.type, r_src.status,
+                r_obj.object_name, r_obj.object_type, r_obj.status,
                 r_src.line, r_src.line, 'LOOP_EXIT');
             GOTO next_line;
         END IF;
@@ -383,7 +370,7 @@ BEGIN
             v_in_exception := 'Y';
             insert_rule(
                 'Exception handler block begins',
-                r_src.name, r_src.type, r_src.status,
+                r_obj.object_name, r_obj.object_type, r_obj.status,
                 r_src.line, r_src.line, 'EXCEPTION_HANDLER');
             GOTO next_line;
         END IF;
@@ -392,7 +379,7 @@ BEGIN
         IF v_in_exception = 'Y' AND INSTR(v_upper_text, 'WHEN ') > 0 THEN
             insert_rule(
                 'Exception handler: ' || SUBSTR(v_trimmed, 1, 200),
-                r_src.name, r_src.type, r_src.status,
+                r_obj.object_name, r_obj.object_type, r_obj.status,
                 r_src.line, r_src.line, 'EXCEPTION_HANDLER');
             GOTO next_line;
         END IF;
@@ -410,27 +397,29 @@ BEGIN
            INSTR(v_upper_text, 'RETURN;') = 0 THEN
             insert_rule(
                 'Return value logic: ' || SUBSTR(v_trimmed, 1, 200),
-                r_src.name, r_src.type, r_src.status,
+                r_obj.object_name, r_obj.object_type, r_obj.status,
                 r_src.line, r_src.line, 'RETURN_VALUE');
         END IF;
 
         <<next_line>>
         NULL;
-    END LOOP;
+        END LOOP; -- end c_source inner loop
 
-    -- Handle any trailing multi-line patterns
-    IF v_if_pending = 'Y' THEN
-        insert_rule(
-            'Conditional logic (IF without matching THEN)',
-            v_prev_object, v_prev_type, v_obj_status,
-            v_if_start_line, v_if_start_line, 'IF_THEN');
-    END IF;
-    IF v_case_pending = 'Y' THEN
-        insert_rule(
-            'Case expression (CASE without matching WHEN)',
-            v_prev_object, v_prev_type, v_obj_status,
-            v_case_start_line, v_case_start_line, 'CASE_WHEN');
-    END IF;
+        -- Handle any trailing multi-line patterns for this object
+        IF v_if_pending = 'Y' THEN
+            insert_rule(
+                'Conditional logic (IF without matching THEN)',
+                r_obj.object_name, r_obj.object_type, r_obj.status,
+                v_if_start_line, v_if_start_line, 'IF_THEN');
+        END IF;
+        IF v_case_pending = 'Y' THEN
+            insert_rule(
+                'Case expression (CASE without matching WHEN)',
+                r_obj.object_name, r_obj.object_type, r_obj.status,
+                v_case_start_line, v_case_start_line, 'CASE_WHEN');
+        END IF;
+
+    END LOOP; -- end c_source_object outer loop
 
     COMMIT;
 
